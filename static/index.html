@@ -13,23 +13,18 @@
   --green:#1E6B45;--green-bg:#EAF5EE;
   --sand:#FDF8F3;--sand-dark:#EDE0D4;
   --white:#FEFEFE;--ink:#1A1A1A;--ink-soft:#9A8E85;
-  --shadow:0 4px 32px rgba(192,57,43,.10);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:var(--sand);font-family:'DM Sans',sans-serif;color:var(--ink);overflow:hidden}
-.app{display:grid;grid-template-rows:auto 1fr auto;height:100dvh;max-width:860px;margin:0 auto;background:var(--white);box-shadow:var(--shadow)}
+.app{display:grid;grid-template-rows:auto 1fr auto;height:100dvh;max-width:860px;margin:0 auto;background:var(--white);box-shadow:0 4px 32px rgba(192,57,43,.10)}
 
 /* HEADER */
-header{display:flex;align-items:center;gap:12px;padding:12px 18px;background:var(--red);color:#fff;position:relative;overflow:hidden;flex-shrink:0}
+header{display:flex;align-items:center;gap:12px;padding:12px 18px;background:var(--red);color:#fff;flex-shrink:0;overflow:hidden;position:relative}
 header::after{content:'';position:absolute;right:-50px;top:-50px;width:170px;height:170px;background:rgba(255,255,255,.05);border-radius:50%;pointer-events:none}
 .logo{width:44px;height:44px;background:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
 .htext h1{font-family:'DM Serif Display',serif;font-size:1.1rem;font-weight:400;line-height:1.2}
 .htext p{font-size:.7rem;opacity:.82;font-weight:300;margin-top:1px}
-.hright{margin-left:auto;display:flex;align-items:center;gap:7px;flex-shrink:0}
-.badge{background:rgba(255,255,255,.2);color:#fff;font-size:.66rem;font-weight:600;padding:4px 10px;border-radius:20px;letter-spacing:.04em;white-space:nowrap}
-.hbtn{display:none;align-items:center;gap:4px;background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.45);color:#fff;border-radius:20px;padding:5px 11px;font-size:.68rem;font-weight:600;cursor:pointer;transition:background .2s;font-family:inherit;white-space:nowrap}
-.hbtn:hover{background:rgba(255,255,255,.32)}
-.hbtn:disabled{opacity:.55;cursor:not-allowed}
+.badge{margin-left:auto;background:rgba(255,255,255,.2);color:#fff;font-size:.66rem;font-weight:600;padding:4px 10px;border-radius:20px;white-space:nowrap;flex-shrink:0}
 
 /* MESSAGES */
 #messages{overflow-y:auto;padding:16px 16px 8px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
@@ -41,18 +36,49 @@ header::after{content:'';position:absolute;right:-50px;top:-50px;width:170px;hei
 .av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;margin-top:2px}
 .msg.bot .av{background:var(--red-pale)}
 .msg.user .av{background:var(--red);color:#fff;font-size:13px}
-.bubble{max-width:76%;padding:11px 15px;border-radius:18px;line-height:1.6;font-size:.91rem;position:relative}
+.bubble{max-width:76%;padding:11px 15px;border-radius:18px;line-height:1.6;font-size:.91rem}
 .msg.bot .bubble{background:var(--white);border:1.5px solid var(--sand-dark);border-bottom-left-radius:4px}
 .msg.user .bubble{background:var(--red);border-bottom-right-radius:4px;color:#fff}
+
+/* Markdown inside bot bubble */
 .bubble p{margin-bottom:5px}.bubble p:last-child{margin-bottom:0}
 .bubble strong{font-weight:600}.bubble em{font-style:italic}
 .bubble ul,.bubble ol{padding-left:1.3em;margin:5px 0}.bubble li{margin:3px 0}
 .bubble h1,.bubble h2,.bubble h3{font-weight:600;margin:8px 0 4px;color:var(--green)}
-.bactions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
-.abtn{border:none;border-radius:20px;font-size:.7rem;font-weight:600;padding:5px 12px;cursor:pointer;display:flex;align-items:center;gap:4px;transition:background .15s,transform .1s;font-family:inherit}
-.abtn:active{transform:scale(.93)}.abtn:disabled{opacity:.55;cursor:not-allowed}
-.abtn-play{background:var(--red-pale);color:var(--red)}.abtn-play:hover:not(:disabled){background:var(--red);color:#fff}
-.abtn-pdf{background:var(--green-bg);color:var(--green)}.abtn-pdf:hover:not(:disabled){background:var(--green);color:#fff}
+.bubble hr{border:none;border-top:1.5px solid var(--sand-dark);margin:10px 0}
+
+/* ── CLICKABLE LINKS ── */
+.bubble a{text-decoration:none;transition:opacity .15s}
+.bubble a:hover{opacity:.75}
+
+/* Phone — tappable pill */
+.bubble a[href^="tel"]{
+  display:inline-flex;align-items:center;gap:5px;
+  background:#E8F5E9;color:#1A5276;font-weight:600;
+  border:1.5px solid #A5D6A7;border-radius:20px;
+  padding:3px 12px;font-size:.85em;cursor:pointer;
+  text-decoration:none;white-space:nowrap;
+}
+.bubble a[href^="tel"]::before{content:"📞 "}
+.bubble a[href^="tel"]:hover{background:#C8E6C9}
+
+/* Email — tappable pill */
+.bubble a[href^="mailto"]{
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--red-pale);color:var(--red);font-weight:600;
+  border:1.5px solid var(--red-border);border-radius:20px;
+  padding:3px 12px;font-size:.85em;cursor:pointer;
+  text-decoration:none;white-space:nowrap;
+}
+.bubble a[href^="mailto"]::before{content:"✉️ "}
+.bubble a[href^="mailto"]:hover{background:#F8BBD9}
+
+/* Website — underlined */
+.bubble a[href^="http"]{
+  color:var(--green);text-decoration:underline;
+  text-underline-offset:2px;word-break:break-all;
+}
+.bubble a[href^="http"]:hover{color:var(--red)}
 
 /* TYPING */
 .typing-b{padding:13px 16px!important}
@@ -74,20 +100,21 @@ textarea{flex:1;border:none;background:transparent;font-family:inherit;font-size
 textarea::placeholder{color:var(--ink-soft)}
 .ibtn{width:38px;height:38px;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0;transition:background .15s,transform .1s}
 .ibtn:active{transform:scale(.91)}
-#btnSend{background:var(--red);color:#fff}#btnSend:hover{background:var(--red-h)}
+#btnSend{background:var(--red);color:#fff}
+#btnSend:hover{background:var(--red-h)}
 #btnSend:disabled{background:var(--sand-dark);cursor:not-allowed}
-#btnMic{background:var(--sand-dark);color:var(--red)}#btnMic:hover{background:var(--red-pale)}
-#btnMic.rec{background:var(--red);color:#fff;animation:pulse 1s infinite}
-@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(192,57,43,.45)}50%{box-shadow:0 0 0 8px rgba(192,57,43,0)}}
 .disc{text-align:center;font-size:.65rem;color:var(--ink-soft);margin-top:5px}
 
-/* EMPTY */
+/* EMPTY STATE */
 #empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;flex:1;padding:36px 22px;text-align:center}
 #empty .ico{font-size:3rem}
 #empty h2{font-family:'DM Serif Display',serif;font-size:1.3rem;font-weight:400;color:var(--red)}
 #empty p{color:var(--ink-soft);font-size:.84rem;max-width:300px;line-height:1.55}
 .dr-card{background:var(--red-pale);border-radius:12px;padding:11px 16px;font-size:.78rem;color:#4A4A4A;margin-top:4px;max-width:330px;text-align:left;line-height:1.7}
 .dr-card strong{color:var(--red)}
+.dr-card a[href^="tel"]{color:#1A5276;font-weight:600;text-decoration:none}
+.dr-card a[href^="mailto"]{color:var(--red);font-weight:600;text-decoration:none}
+.dr-card a[href^="http"]{color:var(--green);text-decoration:underline}
 </style>
 </head>
 <body>
@@ -99,11 +126,7 @@ textarea::placeholder{color:var(--ink-soft)}
       <h1>Red Apple Wellness Diet Center</h1>
       <p>Dr. Meghana Kumare · Dietician &amp; Sports Nutritionist · Since 2008</p>
     </div>
-    <div class="hright">
-      <button id="btnPlanPdf" class="hbtn" title="Download last diet plan as PDF">📥 Plan PDF</button>
-      <button id="btnChatPdf" class="hbtn" title="Download full chat as PDF">💬 Chat PDF</button>
-      <span class="badge">● Online</span>
-    </div>
+    <span class="badge">● Online</span>
   </header>
 
   <div id="messages">
@@ -114,7 +137,9 @@ textarea::placeholder{color:var(--ink-soft)}
       <div class="dr-card">
         <strong>Dr. Meghana Kumare</strong><br>
         Dietician &amp; Sports Nutritionist | 20+ years<br>
-        📞 +91 7774944783 &nbsp;|&nbsp; 📧 rawdiets12@gmail.com<br>
+        <a href="tel:+917774944783">📞 +91 7774944783</a><br>
+        <a href="mailto:rawdiets12@gmail.com">✉️ rawdiets12@gmail.com</a><br>
+        <a href="https://raw-diet.com/" target="_blank" rel="noopener">🌐 raw-diet.com</a><br>
         📍 Dharampeth, Nagpur – 440010
       </div>
     </div>
@@ -125,56 +150,34 @@ textarea::placeholder{color:var(--ink-soft)}
     <button class="chip" onclick="suggest(this)">💪 Build muscle diet plan</button>
     <button class="chip" onclick="suggest(this)">🥗 Veg meal plan for today</button>
     <button class="chip" onclick="suggest(this)">😣 Feeling bloated after lunch</button>
-    <button class="chip" onclick="suggest(this)">📥 Give me a weekly diet plan</button>
+    <button class="chip" onclick="suggest(this)">📋 Give me a weekly diet plan</button>
   </div>
 
   <div class="input-area">
     <div class="input-row">
       <textarea id="txtInput" rows="1" placeholder="Ask about your diet, meals, or health…" maxlength="2000"></textarea>
-      <button class="ibtn" id="btnMic" title="Voice message">🎙️</button>
       <button class="ibtn" id="btnSend" title="Send">➤</button>
     </div>
-    <p class="disc">For medical conditions or medications, consult Dr. Meghana Kumare · +91 7774944783 · Not medical advice.</p>
+    <p class="disc">For medical conditions, consult Dr. Meghana Kumare · Not a substitute for medical advice.</p>
   </div>
 
 </div>
 
 <script>
-/* ================================================================
-   SINGLE CLEAN SCRIPT — no duplicate functions, no patching hacks
-   ================================================================ */
-
 const API  = location.origin;
 const SKEY = 'rawdiet_sid';
+let sid      = localStorage.getItem(SKEY) || '';
+let fbToken  = document.querySelector('meta[name="firebase-token"]')?.content || '';
+let userName = 'User';
+let busy     = false;
 
-// State
-let sid        = localStorage.getItem(SKEY) || '';
-let fbToken    = document.querySelector('meta[name="firebase-token"]')?.content || '';
-let userName   = 'User';
-let busy       = false;
-let lastPlan   = '';    // text of last diet plan (for header PDF button)
-let msgCount   = 0;     // count of bot replies (for chat PDF button)
-let recording  = false;
-let recorder   = null;
-let recChunks  = [];
+const msgsEl   = document.getElementById('messages');
+const txtEl    = document.getElementById('txtInput');
+const btnSend  = document.getElementById('btnSend');
+const chipsEl  = document.getElementById('chips');
+const emptyEl  = document.getElementById('empty');
 
-// DOM
-const msgsEl      = document.getElementById('messages');
-const txtEl       = document.getElementById('txtInput');
-const btnSend     = document.getElementById('btnSend');
-const btnMic      = document.getElementById('btnMic');
-const chipsEl     = document.getElementById('chips');
-const emptyEl     = document.getElementById('empty');
-const btnPlanPdf  = document.getElementById('btnPlanPdf');
-const btnChatPdf  = document.getElementById('btnChatPdf');
-
-// ── Wire up buttons ────────────────────────────────────────────────────────────
-btnSend.addEventListener('click', () => send());
-btnMic.addEventListener('click',  () => toggleMic());
-btnPlanPdf.addEventListener('click', () => downloadPlanPdf());
-btnChatPdf.addEventListener('click', () => downloadChatPdf());
-
-// ── Textarea auto-grow ─────────────────────────────────────────────────────────
+// ── Textarea auto-grow ─────────────────────────────────────────────
 txtEl.addEventListener('input', () => {
   txtEl.style.height = 'auto';
   txtEl.style.height = Math.min(txtEl.scrollHeight, 120) + 'px';
@@ -182,99 +185,114 @@ txtEl.addEventListener('input', () => {
 txtEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
+btnSend.addEventListener('click', () => send());
 
-// ── Markdown → HTML ────────────────────────────────────────────────────────────
+// ── Markdown → HTML with REAL clickable links ──────────────────────
 function md(raw) {
-  let s = raw.replace(/\[PDF_REQUESTED\]/g, '').trim();
-  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  s = s.replace(/^### (.+)$/gm,'<h3>$1</h3>');
-  s = s.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  s = s.replace(/^# (.+)$/gm,  '<h1>$1</h1>');
-  s = s.replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>');
-  s = s.replace(/\*\*(.+?)\*\*/g,    '<strong>$1</strong>');
-  s = s.replace(/\*(.+?)\*/g,        '<em>$1</em>');
-  s = s.replace(/^[\-\*] (.+)$/gm,   '<li>$1</li>');
-  s = s.replace(/^\d+[\.\)] (.+)$/gm,'<li>$1</li>');
-  s = s.replace(/(<li>.*<\/li>(\n|$))+/g, m => '<ul>' + m + '</ul>');
+  if (!raw) return '';
+  let s = raw.trim();
+
+  // Step 1: collect all link replacements BEFORE any escaping
+  const parts = [];
+  let idx = 0;
+
+  function placeholder(html) {
+    const key = `\x00${idx++}\x00`;
+    parts.push({ key, html });
+    return key;
+  }
+
+  // 1a. Markdown links [text](url) — handles all variants
+  s = s.replace(/\[([^\]]*)\]\((https?:\/\/[^)]+|tel:[^)]+|mailto:[^)]+)\)/g,
+    (_, text, url) => {
+      // If text is same as url or looks like a url, use clean domain as display
+      let display = text;
+      if (!display || display === url || /^https?:\/\//.test(display)) {
+        display = url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
+      }
+      return placeholder(`<a href="${url}" target="_blank" rel="noopener">${escHtml(display)}</a>`);
+    });
+
+  // 1b. Bare phone numbers: +91 XXXXX XXXXX or +91XXXXXXXXXX
+  s = s.replace(/(\+91[\s\-]?\d{5}[\s\-]?\d{5})/g, (m) => {
+    const tel = 'tel:' + m.replace(/[\s\-]/g, '');
+    return placeholder(`<a href="${tel}">${escHtml(m)}</a>`);
+  });
+
+  // 1c. Bare email addresses
+  s = s.replace(/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,6})/g, (m) =>
+    placeholder(`<a href="mailto:${m}">${escHtml(m)}</a>`));
+
+  // 1d. Bare https:// URLs (not already in a placeholder)
+  s = s.replace(/https?:\/\/[^\s<>"',)\]]+/g, (m) => {
+    const display = m.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '');
+    return placeholder(`<a href="${m}" target="_blank" rel="noopener">${escHtml(display)}</a>`);
+  });
+
+  // Step 2: HTML escape everything EXCEPT placeholders
+  // Split on placeholders, escape the non-placeholder parts only
+  const tokens = s.split(/(\x00\d+\x00)/);
+  s = tokens.map(t => /^\x00\d+\x00$/.test(t) ? t : escHtml(t)).join('');
+
+  // Step 3: Markdown formatting (on escaped text)
+  s = s.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^## (.+)$/gm,  '<h2>$1</h2>');
+  s = s.replace(/^# (.+)$/gm,   '<h1>$1</h1>');
+  s = s.replace(/^-{3,}$/gm,    '<hr>');
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  s = s.replace(/\*\*(.+?)\*\*/g,     '<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g,         '<em>$1</em>');
+  s = s.replace(/^[\-\*] (.+)$/gm,    '<li>$1</li>');
+  s = s.replace(/^\d+[\.)] (.+)$/gm,  '<li>$1</li>');
+  s = s.replace(/(<li>[\s\S]*?<\/li>)/g, m => '<ul>' + m + '</ul>');
+
+  // Paragraphs
   s = s.split(/\n{2,}/).map(b => {
-    b = b.trim();
-    if (!b) return '';
-    if (/^<(h[1-3]|ul|ol|li)/.test(b)) return b;
-    return '<p>' + b.replace(/\n/g,'<br>') + '</p>';
+    b = b.trim(); if (!b) return '';
+    if (/^<(h[1-3]|ul|ol|li|hr)/.test(b)) return b;
+    return '<p>' + b.replace(/\n/g, '<br>') + '</p>';
   }).join('');
+
+  // Step 4: Restore links
+  parts.forEach(({ key, html }) => { s = s.split(key).join(html); });
+
   return s;
 }
 
-function esc(t) { return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(t) {
+  return String(t)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
 
-// ── UI helpers ─────────────────────────────────────────────────────────────────
+// ── UI helpers ─────────────────────────────────────────────────────
 function hideEmpty() {
   emptyEl.style.display = 'none';
   chipsEl.style.display = 'none';
 }
-
 function scrollBottom() { msgsEl.scrollTop = msgsEl.scrollHeight; }
 
-function addUserBubble(text) {
+function addUser(text) {
   hideEmpty();
   const d = document.createElement('div');
   d.className = 'msg user';
-  d.innerHTML = `<div class="av">🧑</div><div class="bubble">${esc(text)}</div>`;
-  msgsEl.appendChild(d);
-  scrollBottom();
-  return d;
+  d.innerHTML = `<div class="av">🧑</div><div class="bubble">${escHtml(text)}</div>`;
+  msgsEl.appendChild(d); scrollBottom(); return d;
 }
 
-function addBotBubble() {
+function addBot() {
   hideEmpty();
   const d = document.createElement('div');
   d.className = 'msg bot';
-  d.innerHTML = `
-    <div class="av">🍎</div>
-    <div class="bubble">
-      <div class="btext"></div>
-      <div class="bactions" style="display:none">
-        <button class="abtn abtn-play" style="display:none">🔊 Play</button>
-        <button class="abtn abtn-pdf"  style="display:none">📥 Download PDF</button>
-      </div>
-    </div>`;
-  msgsEl.appendChild(d);
-  scrollBottom();
-  return d;
+  d.innerHTML = `<div class="av">🍎</div><div class="bubble"><div class="btext"></div></div>`;
+  msgsEl.appendChild(d); scrollBottom(); return d;
 }
 
-function fillBotBubble(divEl, text, audioB64) {
-  const btextEl   = divEl.querySelector('.btext');
-  const actionsEl = divEl.querySelector('.bactions');
-  const playBtn   = divEl.querySelector('.abtn-play');
-  const pdfBtn    = divEl.querySelector('.abtn-pdf');
-
-  if (btextEl) btextEl.innerHTML = md(text);
-
-  const hasPlan = text.includes('[PDF_REQUESTED]');
-  const hasAudio = !!audioB64;
-
-  if (hasPlan || hasAudio) actionsEl.style.display = 'flex';
-
-  if (hasAudio) {
-    playBtn.style.display = 'flex';
-    playBtn._b64 = audioB64;
-    playBtn.onclick = () => playB64(playBtn._b64);
-  }
-
-  if (hasPlan) {
-    pdfBtn.style.display = 'flex';
-    pdfBtn._planText = text;
-    pdfBtn.onclick = () => dlPlanPdf(pdfBtn._planText, pdfBtn);
-    // Update global state for header button
-    lastPlan = text;
-    btnPlanPdf.style.display = 'flex';
-  }
-
-  // Show chat PDF button after first real reply
-  msgCount++;
-  if (msgCount >= 1) btnChatPdf.style.display = 'flex';
-
+function setBotText(div, text) {
+  const bt = div.querySelector('.btext');
+  if (bt) bt.innerHTML = md(text);
   scrollBottom();
 }
 
@@ -286,98 +304,66 @@ function addTyping() {
 }
 function rmTyping() { document.getElementById('typing')?.remove(); }
 
-// ── SSE stream reader ──────────────────────────────────────────────────────────
+// ── SSE reader ─────────────────────────────────────────────────────
 async function readSSE(resp, onChunk, onDone, onError) {
-  const reader  = resp.body.getReader();
+  const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
-
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-
     let nl;
     while ((nl = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
+      const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
       if (!line.startsWith('data:')) continue;
-      const raw = line.slice(5).trim();
-      if (!raw) continue;
-      let evt;
-      try { evt = JSON.parse(raw); } catch { continue; }
-
-      if (evt.type === 'chunk' && evt.text)   onChunk(evt.text);
-      else if (evt.type === 'done')           onDone(evt);
-      else if (evt.type === 'error')          onError(evt.text || 'Error');
+      const raw = line.slice(5).trim(); if (!raw) continue;
+      let evt; try { evt = JSON.parse(raw); } catch { continue; }
+      if (evt.type === 'chunk' && evt.text) onChunk(evt.text);
+      else if (evt.type === 'done')         onDone(evt);
+      else if (evt.type === 'error')        onError(evt.text || 'Error');
     }
   }
 }
 
-// ── SEND TEXT MESSAGE ──────────────────────────────────────────────────────────
+// ── SEND MESSAGE ───────────────────────────────────────────────────
 async function send(override) {
   const text = (override !== undefined ? override : txtEl.value).trim();
   if (!text || busy) return;
-
   txtEl.value = ''; txtEl.style.height = 'auto';
   btnSend.disabled = true; busy = true;
 
-  addUserBubble(text);
-  addTyping();
-
+  addUser(text); addTyping();
   const fd = new FormData();
   fd.append('text', text);
   if (sid) fd.append('session_id', sid);
-
   const hdrs = {};
   if (fbToken) hdrs['Authorization'] = 'Bearer ' + fbToken;
 
-  const botDiv = null; // will be set after typing removed
-  let div = null;
-  let full = '';
-
+  let div = null; let full = '';
   try {
     const resp = await fetch(API + '/chat/stream', {
-      method: 'POST', headers: hdrs, body: fd, credentials: 'include'
+      method:'POST', headers:hdrs, body:fd, credentials:'include'
     });
-
     if (!resp.ok) {
-      rmTyping();
-      div = addBotBubble();
-      fillBotBubble(div, `⚠️ Server error (${resp.status}). Please try again.`, null);
-      return;
+      rmTyping(); div = addBot();
+      setBotText(div, `Server error (${resp.status}). Please try again.`); return;
     }
-
-    rmTyping();
-    div = addBotBubble();
-
+    rmTyping(); div = addBot();
     await readSSE(resp,
-      // onChunk
-      (chunk) => {
-        full += chunk;
-        const bt = div.querySelector('.btext');
-        if (bt) bt.innerHTML = md(full);
-        scrollBottom();
-      },
-      // onDone
-      (evt) => {
-        const final = evt.text || full;
-        fillBotBubble(div, final, evt.audio_base64 || null);
+      chunk => { full += chunk; setBotText(div, full); },
+      evt   => {
+        setBotText(div, evt.text || full);
         if (evt.session_id) { sid = evt.session_id; localStorage.setItem(SKEY, sid); }
       },
-      // onError
-      (msg) => {
-        fillBotBubble(div, '⚠️ ' + msg, null);
-      }
+      msg => setBotText(div, '⚠️ ' + msg)
     );
-
-    if (!full) fillBotBubble(div, '⚠️ No response. Please try again.', null);
-
-  } catch (err) {
+    if (!full && div) setBotText(div, '⚠️ No response. Please try again.');
+  } catch(err) {
     rmTyping();
-    if (!div) div = addBotBubble();
-    fillBotBubble(div, '⚠️ Connection error. Check your network and try again.', null);
-    console.error('send() error:', err);
+    if (!div) div = addBot();
+    setBotText(div, '⚠️ Connection error. Please try again.');
+    console.error('send error:', err);
   } finally {
     busy = false; btnSend.disabled = false; txtEl.focus();
   }
@@ -387,157 +373,7 @@ function suggest(btn) {
   send(btn.textContent.replace(/^[^\w\u0900-\u097F]+/, '').trim());
 }
 
-// ── PDF HELPERS ────────────────────────────────────────────────────────────────
-async function dlPlanPdf(planText, btn) {
-  if (!planText) { alert('No plan text available.'); return; }
-  const orig = btn.textContent;
-  btn.textContent = '⏳ Generating...'; btn.disabled = true;
-  try {
-    const fd = new FormData();
-    fd.append('plan_text', planText);
-    fd.append('user_name', userName);
-    const hdrs = {};
-    if (fbToken) hdrs['Authorization'] = 'Bearer ' + fbToken;
-    const resp = await fetch(API + '/chat/download-plan', {
-      method: 'POST', headers: hdrs, body: fd, credentials: 'include'
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const blob = await resp.blob();
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = 'RedApple_DietPlan_' + userName.replace(/\s+/g,'_') + '.pdf';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    btn.textContent = '✅ Downloaded!';
-    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
-  } catch(e) {
-    alert('PDF failed: ' + e.message);
-    btn.textContent = orig; btn.disabled = false;
-  }
-}
-
-async function downloadPlanPdf() {
-  if (!lastPlan) { alert('No diet plan yet. Ask me for a meal or diet plan first!'); return; }
-  await dlPlanPdf(lastPlan, btnPlanPdf);
-}
-
-async function downloadChatPdf() {
-  const orig = btnChatPdf.textContent;
-  btnChatPdf.textContent = '⏳ Generating...'; btnChatPdf.disabled = true;
-  try {
-    const fd = new FormData();
-    fd.append('user_name', userName);
-    if (sid) fd.append('session_id', sid);
-    const hdrs = {};
-    if (fbToken) hdrs['Authorization'] = 'Bearer ' + fbToken;
-    const resp = await fetch(API + '/chat/download-chat', {
-      method: 'POST', headers: hdrs, body: fd, credentials: 'include'
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    const blob = await resp.blob();
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = 'RedApple_Chat_' + userName.replace(/\s+/g,'_') + '.pdf';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    btnChatPdf.textContent = '✅ Downloaded!';
-    setTimeout(() => { btnChatPdf.textContent = orig; btnChatPdf.disabled = false; }, 3000);
-  } catch(e) {
-    alert('Chat PDF failed: ' + e.message);
-    btnChatPdf.textContent = orig; btnChatPdf.disabled = false;
-  }
-}
-
-// ── AUDIO ──────────────────────────────────────────────────────────────────────
-function playB64(b64) {
-  try {
-    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-    const url   = URL.createObjectURL(new Blob([bytes], { type:'audio/mpeg' }));
-    const a     = new Audio(url);
-    a.play().catch(e => console.warn('Audio blocked:', e));
-    a.onended = () => URL.revokeObjectURL(url);
-  } catch(e) { console.warn('Audio error:', e); }
-}
-
-// ── MICROPHONE ─────────────────────────────────────────────────────────────────
-async function toggleMic() { recording ? stopMic() : await startMic(); }
-
-async function startMic() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    recChunks = [];
-    recorder  = new MediaRecorder(stream);
-    recorder.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
-    recorder.onstop = sendVoice;
-    recorder.start(100);
-    recording = true;
-    btnMic.classList.add('rec'); btnMic.textContent = '⏹️';
-  } catch(e) { alert('Microphone access denied. Please allow it in browser settings.'); }
-}
-
-function stopMic() {
-  if (recorder && recording) {
-    recorder.stop();
-    recorder.stream.getTracks().forEach(t => t.stop());
-    recording = false;
-    btnMic.classList.remove('rec'); btnMic.textContent = '🎙️';
-  }
-}
-
-async function sendVoice() {
-  if (!recChunks.length) return;
-  const blob    = new Blob(recChunks, { type:'audio/webm' });
-  const userDiv = addUserBubble('🎙️ Voice message…');
-  addTyping();
-  btnSend.disabled = true; busy = true;
-
-  const fd = new FormData();
-  fd.append('file', blob, 'voice.webm');
-  if (sid) fd.append('session_id', sid);
-  const hdrs = {};
-  if (fbToken) hdrs['Authorization'] = 'Bearer ' + fbToken;
-
-  let div  = null;
-  let full = '';
-
-  try {
-    const resp = await fetch(API + '/voice/stream', {
-      method:'POST', headers:hdrs, body:fd, credentials:'include'
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    rmTyping();
-    div = addBotBubble();
-
-    await readSSE(resp,
-      (chunk) => {
-        full += chunk;
-        const bt = div.querySelector('.btext');
-        if (bt) bt.innerHTML = md(full);
-        scrollBottom();
-      },
-      (evt) => {
-        const final = evt.text || full;
-        fillBotBubble(div, final, evt.audio_base64 || null);
-        if (evt.session_id) { sid = evt.session_id; localStorage.setItem(SKEY, sid); }
-        if (evt.user_said) {
-          const ub = userDiv.querySelector('.bubble');
-          if (ub) ub.textContent = '🎙️ ' + evt.user_said;
-        }
-        if (evt.audio_base64) playB64(evt.audio_base64);
-      },
-      (msg) => { fillBotBubble(div, '⚠️ ' + msg, null); }
-    );
-  } catch(err) {
-    rmTyping();
-    if (!div) div = addBotBubble();
-    fillBotBubble(div, '⚠️ Voice failed. Please try again.', null);
-    console.error('sendVoice error:', err);
-  } finally {
-    busy = false; btnSend.disabled = false;
-  }
-}
-
-// ── postMessage from native app ────────────────────────────────────────────────
+// ── PostMessage from native app ────────────────────────────────────
 window.addEventListener('message', e => {
   if (e.data?.type === 'firebase-token') fbToken = e.data.token;
   if (e.data?.type === 'user-name')      userName = e.data.name;

@@ -9,8 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    python -c "from reportlab.lib.pagesizes import A4; print('reportlab OK')"
+    pip install --no-cache-dir -r requirements.txt
 
 # ── Runtime stage ───────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runner
@@ -25,8 +24,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy only chatbot Python files
-COPY main.py chat.py voice_chat.py rag_engine.py database.py models.py pdf_generator.py ./
-COPY static ./static/
+COPY main.py chat.py rag_engine.py database.py models.py ./
 
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1

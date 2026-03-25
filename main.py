@@ -3,11 +3,9 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from chat import router as chat_router
-from voice_chat import router as voice_router
 from rag_engine import initialize_gemini
 
 # ── App ────────────────────────────────────────────────────────────────────────
@@ -51,23 +49,16 @@ async def startup_tasks():
     except Exception as e:
         logger.warning(f"⚠️ DB init skipped: {e}")
 
-# ── API Routers (MUST come before static mount) ────────────────────────────────
+# ── API Routers ────────────────────────────────────────────────────────────────
 app.include_router(chat_router)
-app.include_router(voice_router)
 
 # ── Health ─────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "Raw Diet Personal Trainer AI", "version": "1.0.0"}
 
-# ── Serve UI at root ───────────────────────────────────────────────────────────
-_static_dir = os.path.join(os.path.dirname(__file__), "static")
-_index_html  = os.path.join(_static_dir, "index.html")
-
 @app.get("/")
-async def serve_root():
-    if os.path.exists(_index_html):
-        return FileResponse(_index_html, media_type="text/html")
+async def root():
     return JSONResponse({"status": "ok", "service": "Raw Diet Personal Trainer AI"})
 
 # ── Error handler ──────────────────────────────────────────────────────────────
@@ -78,10 +69,3 @@ async def global_exception_handler(request, exc):
         "error": "Internal server error",
         "detail": str(exc) if os.getenv("DEBUG") else "An error occurred"
     })
-
-# ── Static files mount (LAST so API routes always win) ────────────────────────
-if os.path.isdir(_static_dir):
-    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")
-    logger.info(f"✅ Static UI mounted at /")
-else:
-    logger.warning(f"⚠️ static/ not found at {_static_dir}")
