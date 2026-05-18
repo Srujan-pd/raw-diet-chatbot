@@ -125,56 +125,122 @@ DISEASE_DETECTED_RESPONSE = (
 )
 
 
-def needs_health_advice(message: str) -> bool:
-    return any(kw in message.lower() for kw in HEALTH_ADVICE_KEYWORDS)
+GREETING_KEYWORDS = [
+    "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+    "yo", "hola", "greetings", "sup", "g'day", "howdy"
+]
 
-
-def mentions_disease(message: str) -> bool:
-    return any(kw in message.lower() for kw in DISEASE_KEYWORDS)
+def is_greeting(message: str) -> bool:
+    msg = message.lower().strip().replace("!", "").replace(".", "").replace("?", "").replace(",", "")
+    if msg in GREETING_KEYWORDS:
+        return True
+    
+    words = msg.split()
+    if len(words) <= 3:
+        extra_greeting_words = ["there", "bot", "chatbot", "friend", "everyone", "all", "buddy", "mate", "sir", "maam", "team", "you", "are", "how"]
+        return all(w in GREETING_KEYWORDS or w in extra_greeting_words for w in words)
+        
+    return False
 
 
 def clearly_no_disease(message: str) -> bool:
-    return any(kw in message.lower() for kw in NO_DISEASE_KEYWORDS)
+    msg_lower = message.lower().strip()
+    # Normalize punctuation and common contractions
+    normalized = msg_lower.replace("'", "").replace("`", "").replace("’", "")
+    
+    # Direct exact matches
+    if normalized in ["no", "no.", "n", "none", "nothing", "nope", "nil", "normal", "healthy", "fine", "good", "no health issues"]:
+        return True
+    
+    # Check keywords against both original and normalized
+    no_disease_kws = NO_DISEASE_KEYWORDS + ["dont have", "dont have any", "no medical condition", "no health issue", "no health issues"]
+    if any(kw in msg_lower for kw in no_disease_kws) or any(kw in normalized for kw in no_disease_kws):
+        return True
+        
+    words = normalized.split()
+    if "no" in words or "none" in words or "healthy" in words or "fit" in words:
+        return True
+        
+    return False
 
 
-def disease_already_checked(history: list) -> tuple:
+def mentions_disease(message: str) -> bool:
+    # If the message clearly indicates no disease, it shouldn't trigger the disease keywords
+    if clearly_no_disease(message):
+        return False
+    return any(kw in message.lower() for kw in DISEASE_KEYWORDS)
+
+
+def disease_already_checked(db, session_id: str, history: list) -> tuple:
     """
-    Check last 5 turns — did the bot already ask the disease question?
+    Check if the disease check has already been performed in this session.
+    First tries querying the database for all messages in the session,
+    then falls back to the provided history list.
     Returns (already_asked: bool, user_has_disease: bool)
     """
-    for turn in reversed(history[-5:]):
-        bot_reply  = turn.get("answer", "").lower()
+    already_asked = False
+    user_has_disease = False
+
+    # 1. Try querying the database
+    try:
+        from sqlalchemy.orm import Session as SqlAlchemySession
+        if db and (isinstance(db, SqlAlchemySession) or hasattr(db, "query")):
+            messages = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.sessionId == session_id)
+                .order_by(ChatMessage.createdAt.asc())
+                .all()
+            )
+            if messages:
+                for m in messages:
+                    # Bot asked the onboarding question
+                    if m.role == MessageRole.ASSISTANT and ("medical condition" in m.content.lower() or "health issue" in m.content.lower()):
+                        already_asked = True
+                    # OR user explicitly declared no disease/healthy earlier
+                    if m.role == MessageRole.USER and clearly_no_disease(m.content):
+                        already_asked = True
+                    # Check if user mentioned a disease
+                    if m.role == MessageRole.USER and mentions_disease(m.content):
+                        user_has_disease = True
+                return already_asked, user_has_disease
+    except Exception as e:
+        logger.error(f"Database query in disease_already_checked failed: {e}")
+
+    # 2. Fallback to provided history list
+    for turn in history:
+        bot_reply = turn.get("answer", "").lower()
         user_reply = turn.get("question", "").lower()
         if "medical condition" in bot_reply or "health issue" in bot_reply:
-            if clearly_no_disease(user_reply):
-                return True, False
-            if mentions_disease(user_reply):
-                return True, True
-            return False, False
-    return False, False
+            already_asked = True
+        if clearly_no_disease(user_reply):
+            already_asked = True
+        if mentions_disease(user_reply):
+            user_has_disease = True
+
+    return already_asked, user_has_disease
 
 
-def disease_check_response(message: str, history: list) -> str | None:
+def disease_check_response(db, session_id: str, message: str, history: list) -> str | None:
     """
     Gate keeper — runs BEFORE the AI for every message.
     Returns a reply string to send to user, or None to let the AI proceed.
 
     Rules:
-      1. Not a diet/health topic          -> let AI proceed
-      2. Message mentions a disease       -> send DISEASE_DETECTED_RESPONSE
+      1. Greeting message              -> let AI proceed (so the bot can welcome the user)
+      2. Message mentions a disease    -> send DISEASE_DETECTED_RESPONSE
       3. Disease check already done
-           a. User had no disease         -> let AI proceed
-           b. User had a disease          -> send DISEASE_DETECTED_RESPONSE
-      4. Check not done, user says healthy -> let AI proceed
-      5. Check not done yet               -> send DISEASE_CHECK_QUESTION
+           a. User had no disease      -> let AI proceed
+           b. User had a disease       -> send DISEASE_DETECTED_RESPONSE
+      4. Check not done, user declares healthy -> let AI proceed
+      5. Check not done yet            -> send DISEASE_CHECK_QUESTION
     """
-    if not needs_health_advice(message):
+    if is_greeting(message):
         return None
 
     if mentions_disease(message):
         return DISEASE_DETECTED_RESPONSE
 
-    already_asked, has_disease = disease_already_checked(history)
+    already_asked, has_disease = disease_already_checked(db, session_id, history)
     if already_asked:
         if has_disease:
             return DISEASE_DETECTED_RESPONSE
@@ -326,7 +392,7 @@ async def chat_main(
 
         # Disease-check interception — runs before the AI
         history = get_recent_history(db, chat_session.id)
-        intercept = disease_check_response(msg, history)
+        intercept = disease_check_response(db, str(chat_session.id), msg, history)
         if intercept:
             save_exchange(db, chat_session, msg, intercept)
             return {"message": intercept, "session_id": str(chat_session.id), "status": "success"}
@@ -373,7 +439,7 @@ async def chat_stream(
 
         # Disease-check interception — runs before the AI stream
         history      = get_recent_history(db, chat_session.id)
-        intercept    = disease_check_response(msg, history)
+        intercept    = disease_check_response(db, sid_str, msg, history)
         if intercept:
             save_exchange(db, chat_session, msg, intercept)
             return sse_wrap(intercept, sid_str)
