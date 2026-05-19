@@ -24,7 +24,16 @@ if DATABASE_URL:
         )
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        logger.info(":white_check_mark: Connected to NeonDB (public schema)")
+            
+        # Extract host for logging (safely, without password)
+        try:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(DATABASE_URL)
+            db_host = parsed_url.hostname
+            logger.info(f"✅ Connected to NeonDB (public schema) at host: {db_host}")
+        except Exception:
+            logger.info("✅ Connected to NeonDB (public schema)")
+            
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     except Exception as e:
         logger.error(f":x: DB connection failed: {e}")
@@ -66,3 +75,4 @@ def get_db_session():
             db.close()
     else:
         yield _NoOpSession()
+

@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database import get_db_session
+from database import get_db_session, SessionLocal
 from models import ChatMessage, ChatSession, MessageRole
 from rag_engine import get_answer, get_answer_stream
 
@@ -251,6 +251,7 @@ def disease_check_response(db, session_id: str, message: str, history: list) -> 
 
     return DISEASE_CHECK_QUESTION
 
+
 # ── Session helpers ────────────────────────────────────────────────────────────
 
 def get_or_create_session(db, firebase_uid: str, first_message: str = "") -> ChatSession:
@@ -445,12 +446,14 @@ async def chat_stream(
             return sse_wrap(intercept, sid_str)
 
         async def generate():
+            from database import _NoOpSession
+            db_session = SessionLocal() if SessionLocal else _NoOpSession()
             final = ""
             try:
                 async for chunk in _wrap_sync_gen(get_answer_stream(
                     question=msg,
                     session_id=sid_str,
-                    db_session=db,
+                    db_session=db_session,
                     firebase_token=token,
                 )):
                     raw = chunk.strip()
@@ -468,7 +471,7 @@ async def chat_stream(
 
                     if evt.get("type") == "done":
                         final = evt.get("text", final)
-                        save_exchange(db, chat_session, msg, final)
+                        save_exchange(db_session, chat_session, msg, final)
                         yield f"data: {json.dumps({'type': 'done', 'text': final, 'session_id': sid_str})}\n\n"
                         return
 
@@ -477,6 +480,9 @@ async def chat_stream(
             except Exception as e:
                 logger.error(f"stream generate error: {e}", exc_info=True)
                 yield f"data: {json.dumps({'type': 'error', 'text': 'Stream error, please retry.'})}\n\n"
+            finally:
+                if SessionLocal and db_session:
+                    db_session.close()
 
         return StreamingResponse(
             generate(), media_type="text/event-stream",
@@ -540,3 +546,4 @@ async def chat_history(
             for m in messages
         ],
     }
+
