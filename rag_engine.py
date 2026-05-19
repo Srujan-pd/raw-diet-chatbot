@@ -315,7 +315,7 @@ def get_answer(
         if db_session and session_id:
             try:
                 history = get_recent_messages(db_session, session_id, limit=10)
-                history = [{"question": c.question, "answer": c.answer} for c in history]
+                # get_recent_messages already returns dictionaries with 'question' and 'answer' keys
             except Exception as e:
                 logger.warning(f"Could not load history: {e}")
 
@@ -381,7 +381,7 @@ def get_answer_stream(
         if db_session and session_id:
             try:
                 history = get_recent_messages(db_session, session_id, limit=10)
-                history = [{"question": c.question, "answer": c.answer} for c in history]
+                # get_recent_messages already returns dictionaries with 'question' and 'answer' keys
             except Exception as e:
                 logger.warning(f"Could not load history: {e}")
 
@@ -412,15 +412,31 @@ def get_answer_stream(
 
 def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
     try:
-        from models import Chat
-        chats = (
-            db.query(Chat)
-            .filter(Chat.session_id == session_id)
-            .order_by(Chat.created_at.desc())
-            .limit(limit)
+        from models import ChatMessage, MessageRole
+        rows = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.sessionId == session_id)
+            .order_by(ChatMessage.createdAt.desc())
+            .limit(limit * 2)
             .all()
         )
-        return list(reversed(chats))
+        rows = list(reversed(rows))
+        
+        # Convert flat list of messages into question/answer pairs for the prompt
+        history_pairs = []
+        i = 0
+        while i < len(rows) - 1:
+            if rows[i].role == MessageRole.USER and rows[i+1].role == MessageRole.ASSISTANT:
+                history_pairs.append({
+                    "question": rows[i].content,
+                    "answer": rows[i+1].content
+                })
+                i += 2
+            else:
+                i += 1
+                
+        return history_pairs[-limit:]
     except Exception as e:
         logger.error(f"❌ get_recent_messages error: {e}")
         return []
+
