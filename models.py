@@ -63,3 +63,4 @@ class ChatMessage(Base):
                        nullable=False, default=datetime.now)
 
     session   = relationship("ChatSession", back_populates="messages")
+

@@ -168,3 +168,4 @@ async def shutdown_tasks():
             logger.info("✅ Database connections closed")
     except Exception as e:
         logger.error(f"❌ Error during shutdown: {e}")
+

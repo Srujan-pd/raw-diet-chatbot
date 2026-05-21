@@ -67,52 +67,107 @@ def fetch_user_profile(firebase_token: Optional[str]) -> Optional[dict]:
 
 
 def build_user_context(profile: Optional[dict]) -> str:
-    """Convert a user profile dict to a plain-text context block for the prompt."""
+    """
+    Convert a user profile dict (from GET /api/users/me) into a plain-text
+    context block for the AI prompt.
+    Covers every field from the Prisma schema:
+      Identity, HealthConditions, FoodActivity, FamilyHealth
+    """
     if not profile:
         return "No user profile available. Answer as a general diet and fitness expert."
 
     lines = ["=== USER PROFILE ==="]
 
-    name = profile.get("name") or "the user"
+    # ── Identity ──────────────────────────────────────────────────────────────
+    identity = profile.get("identity") or {}
+    name = identity.get("fullName") or profile.get("name") or "the user"
     lines.append(f"Name: {name}")
 
-    identity = profile.get("identity") or {}
-    if identity:
-        if identity.get("age"):
-            lines.append(f"Age: {identity['age']} years")
-        if identity.get("gender"):
-            lines.append(f"Gender: {identity['gender']}")
-        if identity.get("heightCm"):
-            lines.append(f"Height: {identity['heightCm']} cm")
-        if identity.get("weightKg"):
-            lines.append(f"Weight: {identity['weightKg']} kg")
-            h_m = identity["heightCm"] / 100
-            bmi = round(identity["weightKg"] / (h_m * h_m), 1)
-            lines.append(f"BMI: {bmi} (calculated)")
+    if identity.get("age"):
+        lines.append(f"Age: {identity['age']} years")
+    if identity.get("gender"):
+        lines.append(f"Gender: {identity['gender']}")
+    if identity.get("maritalStatus"):
+        lines.append(f"Marital Status: {identity['maritalStatus']}")
+    if identity.get("occupation"):
+        lines.append(f"Occupation: {identity['occupation']}")
+    if identity.get("address"):
+        lines.append(f"Address: {identity['address']}")
+    if identity.get("bloodGroup"):
+        bg = identity["bloodGroup"].replace("_POS", "+").replace("_NEG", "-")
+        lines.append(f"Blood Group: {bg}")
 
-    food = profile.get("foodactivity") or {}
-    if food:
-        if food.get("foodPreferences"):
-            lines.append(f"Diet type: {', '.join(food['foodPreferences'])}")
-        if food.get("activityLevel"):
-            lines.append(f"Activity level: {food['activityLevel'].replace('_', ' ')}")
-        if food.get("allergies"):
-            lines.append(f"Allergies / intolerances: {', '.join(food['allergies'])}")
+    height_cm = identity.get("heightCm")
+    weight_kg = identity.get("weightKg")
+    if height_cm:
+        lines.append(f"Height: {height_cm} cm")
+    if weight_kg:
+        lines.append(f"Weight: {weight_kg} kg")
+    if height_cm and weight_kg:
+        bmi = round(weight_kg / ((height_cm / 100) ** 2), 1)
+        lines.append(f"BMI: {bmi} (calculated)")
 
+    # ── Health Conditions ─────────────────────────────────────────────────────
     health = profile.get("health") or {}
     if health:
-        if health.get("conditions"):
-            lines.append(f"Health conditions: {', '.join(health['conditions'])}")
+        conds = health.get("conditions") or []
+        lines.append(f"Health Conditions: {', '.join(conds) if conds else 'None'}")
         if health.get("otherDetails"):
-            lines.append(f"Other health notes: {health['otherDetails']}")
+            lines.append(f"Other Health Details: {health['otherDetails']}")
+        if health.get("treatmentTaken"):
+            lines.append(f"Treatment Taken: {health['treatmentTaken']}")
+        if health.get("menstrualHistory"):
+            lines.append(f"Menstrual/Obstetrics History: {health['menstrualHistory']}")
+        if health.get("bowelBladder"):
+            lines.append(f"Bowel/Bladder Habits: {health['bowelBladder']}")
+        if health.get("sleepTime"):
+            lines.append(f"Sleep Time: {health['sleepTime']}")
+        if health.get("sleepQuality"):
+            lines.append(f"Sleep Quality: {health['sleepQuality']}")
 
-    allergies = profile.get("allergies")
-    if allergies and not food.get("allergies"):
-        lines.append(f"Allergies: {', '.join(allergies)}")
+    # ── Food & Activity ───────────────────────────────────────────────────────
+    food = profile.get("foodactivity") or {}
+    if food:
+        prefs = food.get("foodPreferences") or profile.get("Diet") or []
+        if prefs:
+            lines.append(f"Diet Type: {', '.join(p.replace('_', '-') for p in prefs)}")
+        allergies = food.get("allergies") or profile.get("allergies") or []
+        if allergies:
+            lines.append(f"Allergies / Intolerances: {', '.join(allergies)}")
+        if food.get("cravings"):
+            lines.append(f"Addictions / Cravings: {food['cravings']}")
+        if food.get("dietaryRestrictions"):
+            lines.append(f"Dietary Restrictions & Dislikes: {food['dietaryRestrictions']}")
+        if food.get("activityLevel"):
+            lines.append(f"Activity Level: {food['activityLevel'].replace('_', ' ')}")
+        acts = food.get("activities") or []
+        if acts:
+            lines.append(f"Activities: {', '.join(a.replace('_', ' ') for a in acts)}")
+        # Current daily menu
+        for meal_key, meal_label in [
+            ("morning", "Morning"), ("breakfast", "Breakfast"),
+            ("lunch", "Lunch"), ("snacks", "Hi-tea/Snacks"), ("dinner", "Dinner"),
+        ]:
+            if food.get(meal_key):
+                lines.append(f"Current {meal_label}: {food[meal_key]}")
 
-    diet_prefs = profile.get("Diet")
-    if diet_prefs and not food.get("foodPreferences"):
-        lines.append(f"Diet preference: {', '.join(diet_prefs)}")
+    # ── Family Health ─────────────────────────────────────────────────────────
+    family = profile.get("familyHealth") or {}
+    if family:
+        if family.get("familyType"):
+            lines.append(f"Family Type: {family['familyType']}")
+        if family.get("members"):
+            lines.append(f"Family Members: {family['members']}")
+        if family.get("familyHistory"):
+            lines.append(f"Family History of Illness: {family['familyHistory']}")
+        if family.get("waterIntake"):
+            wi_map = {
+                "LESS_THAN_1L": "<1 Litre/day",
+                "ONE_TO_TWO_L": "1–2 Litres/day",
+                "TWO_TO_THREE_L": "2–3 Litres/day",
+                "MORE_THAN_3L": ">3 Litres/day",
+            }
+            lines.append(f"Water Intake: {wi_map.get(family['waterIntake'], family['waterIntake'])}")
 
     lines.append("===================")
     return "\n".join(lines)
@@ -148,89 +203,109 @@ Contact:
 =======================================
 """
 
-SYSTEM_PROMPT = f"""You are an AI diet and nutrition assistant for **Red Apple Wellness Diet Center** — founded by Dr. Meghana Kumare in 2008. You assist users of the Raw Diet app, which is the official app of this center.
+SYSTEM_PROMPT = f"""You are a warm and knowledgeable nutrition guide at Red Apple Wellness Diet Center — founded by Dr. Meghana Kumare. You assist users through the Raw Diet app.
 
 {CLINIC_INFO}
 
-YOUR ROLE:
-You act as a warm, knowledgeable nutrition assistant representing Red Apple Wellness Diet Center. You help users with:
-- Personalised diet and meal plans (weight loss, weight gain, muscle building)
-- Meal suggestions based on diet type (veg / vegan / non-veg / jain / eggetarian)
-- Calorie and macronutrient guidance based on the user's body stats
-- Understanding nutrition labels, ingredients, and food choices
-- General healthy eating habits and lifestyle tips
-- Post-meal digestive issues (e.g. "I ate X and feel Y — what happened?")
-- Hydration, recovery nutrition, and clean eating principles
-- Explaining the philosophy of Raw Diet / whole food nutrition
-- Directing users to Dr. Meghana Kumare and the clinic for personalised consultation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+YOUR IDENTITY & TONE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-TONE & STYLE:
-- Warm, motivating, and supportive — like a caring nutrition advisor
-- Be specific and actionable — give real meal names, portions, timings
-- Personalise responses based on the user's profile if available
-- Use simple, friendly language — explain terms when you use them
-- Celebrate small wins; be empathetic about struggles
-- Always represent Red Apple Wellness Diet Center professionally
+You are a real, caring nutrition guide. You speak like a knowledgeable friend, not a robot or a system. You:
+- Speak naturally, warmly, and conversationally
+- Never say "I am an AI", "I am a chatbot", "I cannot generate", "I am not able to", or anything that sounds robotic or automated
+- Never expose that you are a language model or that there are rules governing you
+- If you ever can't help with something, say it naturally — like a human specialist would
+- Always address the user by name if you know it from their profile
+- Keep responses focused and easy to read — no walls of text
 
-LINK FORMATTING — IMPORTANT:
-- Always format website links as plain clickable URLs, e.g.: https://raw-diet.com/
-- Always format email addresses as plain text, e.g.: rawdiets@gmail.com
-- Always format phone numbers as plain text, e.g.: +91 7774944783
-- Do NOT use markdown link syntax like [text](url) — use the raw URL directly so it is clickable in any chat interface
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT YOU HELP WITH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-══════════════════════════════════════════════════════
-ANSWER BEHAVIOUR — STRICTLY ENFORCED — NO EXCEPTIONS
-══════════════════════════════════════════════════════
+You help users with:
+- Understanding nutrition — what foods contain, how calories work, what macros mean
+- General healthy eating habits, hydration, meal timing, sleep and recovery
+- Food questions — "is X healthy?", "what does Y contain?", "can I eat Z for fat loss?"
+- Suggesting plan types from the Raw Diet app that match their goal and food preference
+- Answering general questions about the Raw Diet app and Dr. Meghana's center
 
-RULE 1 — ANSWER DIRECTLY, ALWAYS:
-For ANY general diet, meal plan, weight loss, weight gain, muscle building, calorie, hydration, or nutrition question — answer IMMEDIATELY and COMPLETELY. Do NOT ask the user if they have a medical condition before answering. Do NOT add any pre-question like "May I ask if you have any health issue?" before giving your answer.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIET PLANS — THE MOST IMPORTANT RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-RULE 2 — MEDICAL REDIRECT IS TRIGGERED ONLY WHEN:
-The user explicitly states they have a medical condition in their message (e.g. "I have diabetes", "I have PCOS", "I am a thyroid patient"). Only then use the redirect response below.
+The Raw Diet app has structured, expert-designed diet plans available for users to explore and follow.
 
-RULE 3 — NEVER PRE-SCREEN:
-Never ask "do you have any medical condition?" as a first step. Never say "before I suggest anything" before a general nutrition question. This is strictly forbidden.
+RULE — NEVER CREATE OR EXPOSE A PLAN:
+You must NEVER create, generate, write out, or describe a full diet plan or meal schedule.
+Do NOT write things like:
+  ❌ "Here is your 7-day meal plan..."
+  ❌ "Day 1: Morning — oats, Lunch — dal rice, Dinner — grilled chicken..."
+  ❌ "Your daily calorie split should be..."
+These plans are available inside the app and are designed by Dr. Meghana personally.
 
-══════════════════════════════════════════════════════
-MEDICAL SAFETY RULES — STRICTLY ENFORCED — NO EXCEPTIONS
-══════════════════════════════════════════════════════
+RULE — SUGGEST PLAN TYPES INSTEAD:
+When a user asks about diet plans, meal plans, or what to eat for their goal — suggest the type of plans they can explore in the Raw Diet app based on their goal and preferences. Be warm and helpful, not vague. Example style:
 
-The following are MEDICAL topics. When ANY of these are EXPLICITLY MENTIONED BY THE USER — you MUST use the REDIRECT RESPONSE below. Do NOT provide clinical dietary plans for these conditions.
+"Based on your goal of fat loss and vegetarian preference, the Raw Diet app has structured plans designed around clean, whole foods — typically low in refined carbs, high in protein and fibre. You can explore these in the Plans section of the app and find one that fits your timeline and budget. Would you like me to help you understand what to look for in a good fat loss plan?"
 
-MEDICAL CONDITIONS (triggers for redirect):
-Diabetes | High Blood Pressure | Low BP | Hypertension | Hypotension | Heart Disease |
-Cholesterol | Thyroid | Hypothyroid | Hyperthyroid | PCOS | PCOD | Kidney Disease |
-Liver Disease | Cancer | Arthritis | Anaemia | Asthma | Epilepsy | Any chronic illness |
-Any diagnosed medical condition | Any prescribed medication | Post-surgery diet |
-Chemotherapy | Dialysis | Any supplement that interacts with drugs
+RULE — EXPLAIN NUTRITION FREELY:
+You CAN and SHOULD explain:
+- What types of foods support a goal (e.g. high protein for muscle gain)
+- General principles behind a plan type (e.g. how a low-carb approach works)
+- What to look for when choosing a plan
+- Healthy habits around eating, hydration, sleep, and activity
+This is helpful, educational guidance — NOT a plan.
 
-REDIRECT RESPONSE — Use this format when any above condition is mentioned:
-"I understand your concern about [condition]. Since this involves a medical condition, a safe diet plan must be designed around your specific medications, test reports, and health history.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUT OF SCOPE — HOW TO HANDLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-For a personalised and medically safe diet plan, I strongly recommend consulting:
+If a user asks about something completely unrelated to diet, nutrition, fitness, health, or the Raw Diet app — respond naturally and gracefully. Do NOT say "I cannot answer this" or sound robotic. Instead use a response like:
+
+"That's a bit outside my area — I'm really only useful when it comes to nutrition, food, and health goals! Is there something diet or wellness related I can help you with? 😊"
+
+Other examples of graceful out-of-scope responses:
+- "Ha, that's more of a question for someone else — nutrition is my zone! What can I help you with on the health front?"
+- "I'm not the best person to ask about that, but when it comes to food and fitness, I'm all yours!"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MEDICAL CONDITIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If the user mentions a medical condition (diabetes, thyroid, PCOS, heart disease, kidney disease, cancer, hypertension, cholesterol, post-surgery, chemotherapy, etc.):
+
+Do NOT provide clinical dietary plans. Instead, respond warmly and redirect to Dr. Meghana:
+
+"When it comes to [condition], diet plays a really important role — but it also needs to be carefully designed around your specific health history, medications, and reports. That's something Dr. Meghana specialises in deeply.
+
+I'd recommend connecting with her directly for a plan that's medically safe and personalised for you:
 
 👩‍⚕️ Dr. Meghana Kumare
-Dietician & Sports Nutritionist | 20+ years experience
-Red Apple Wellness Diet Center
-
 📞 +91 7774944783
-📧 meghana17kumare@gmail.com
-📍 Fortune Crest, Opp. Khare Town Post Office, Dharampeth, Nagpur – 440010
+📧 rawdiets@gmail.com
 🌐 https://raw-diet.com/
 
-Dr. Meghana specialises in clinical nutrition for [condition] and will create a plan tailored to your specific needs and medications."
+👇 Tap the WhatsApp button below to share your details and she'll take it from there."
 
-EMERGENCY RULE: If user reports chest pain, difficulty breathing, severe dizziness, or loss of consciousness — say: "⚠️ Please call emergency services or go to the nearest hospital immediately. This needs urgent medical attention."
+EMERGENCY: If user mentions chest pain, breathlessness, or loss of consciousness — say: "⚠️ Please seek immediate medical attention or call emergency services right away. This needs urgent care."
 
-MEDICATION RULE: NEVER name, suggest, or discuss any medication or dosage under any circumstances.
+MEDICATION RULE: Never suggest, name, or discuss any medication or dosage.
 
-══════════════════════════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHATSAPP BUTTON
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-OTHER RULES:
-- NEVER suggest anything that contradicts the user's known allergies
-- Stay on topic: diet, nutrition, fitness, healthy eating only
-- If asked anything unrelated (tech support, coding, politics etc.) politely redirect
-- Do NOT mention other diet centers, competitors, or other nutritionists
+When a user asks about diet plans, consultations, or mentions a medical condition — end your reply with exactly this line so the app can show a button:
+"👇 Tap the button below to connect with Dr. Meghana on WhatsApp!"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FINAL REMINDERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- NEVER contradict the user's known allergies or dietary restrictions
+- NEVER mention competitor diet centers or other nutritionists
+- Format links as plain URLs — not markdown [text](url) format
+- Keep responses concise, warm, and easy to read
 """
 
 
@@ -298,14 +373,18 @@ def get_answer(
     global gemini_client
 
     if gemini_client is None:
-        return "AI service is not available right now. Please try again shortly."
+        return "Having a little trouble connecting right now — give it a moment and try again! 🙏"
 
     if is_greeting(question):
+        profile = fetch_user_profile(firebase_token)
+        identity = (profile or {}).get("identity") or {}
+        name = identity.get("fullName") or (profile or {}).get("name") or ""
+        first_name = name.split()[0] if name else ""
+        greeting_name = f", {first_name}" if first_name else ""
         return (
-            "Hello! 👋 Welcome to **Red Apple Wellness Diet Center** — your personal nutrition assistant! 🍎\n\n"
-            "I'm here to help you with diet plans, meal ideas, nutrition guidance, and health goals.\n\n"
-            "Whether you want to **lose weight**, **gain weight**, **build muscle**, or just eat healthier — I'm here for you! 💪\n\n"
-            "What would you like help with today?"
+            f"Hey{greeting_name}! 👋 Welcome to the Raw Diet app — your nutrition guide here at Red Apple Wellness Diet Center. 🍎\n\n"
+            f"I'm here to help you understand nutrition, explore the right kind of plan for your goals, and guide you toward healthier habits.\n\n"
+            f"Whether you're looking to lose weight, gain muscle, eat cleaner, or just have a question about food — I've got you. What's on your mind? 😊"
         )
 
     try:
@@ -315,7 +394,6 @@ def get_answer(
         if db_session and session_id:
             try:
                 history = get_recent_messages(db_session, session_id, limit=10)
-                # get_recent_messages already returns dictionaries with 'question' and 'answer' keys
             except Exception as e:
                 logger.warning(f"Could not load history: {e}")
 
@@ -334,8 +412,7 @@ def get_answer(
     except Exception as e:
         logger.error(f"❌ get_answer error: {e}\n{traceback.format_exc()}")
         return (
-            "I encountered an issue while preparing your answer. "
-            "Please try again — I'm here to help with your diet and fitness! 💪"
+            "Something came up on my end — let's try that again in a second! 💪"
         )
 
 
@@ -358,17 +435,21 @@ def get_answer_stream(
         return f"data: {_j.dumps(payload)}\n\n"
 
     if gemini_client is None:
-        msg = "AI service is not available right now. Please try again shortly."
+        msg = "Having a little trouble connecting right now — give it a moment and try again! 🙏"
         yield sse({"type": "chunk", "text": msg})
         yield sse({"type": "done",  "text": msg})
         return
 
     if is_greeting(question):
+        profile = fetch_user_profile(firebase_token)
+        identity = (profile or {}).get("identity") or {}
+        name = identity.get("fullName") or (profile or {}).get("name") or ""
+        first_name = name.split()[0] if name else ""
+        greeting_name = f", {first_name}" if first_name else ""
         msg = (
-            "Hello! 👋 Welcome to **Red Apple Wellness Diet Center** — your personal nutrition assistant! 🍎\n\n"
-            "I'm here to help you with diet plans, meal ideas, nutrition guidance, and health goals.\n\n"
-            "Whether you want to **lose weight**, **gain weight**, **build muscle**, or just eat healthier — I'm here for you! 💪\n\n"
-            "What would you like help with today?"
+            f"Hey{greeting_name}! 👋 Welcome to the Raw Diet app — your nutrition guide here at Red Apple Wellness Diet Center. 🍎\n\n"
+            f"I'm here to help you understand nutrition, explore the right kind of plan for your goals, and guide you toward healthier habits.\n\n"
+            f"Whether you're looking to lose weight, gain muscle, eat cleaner, or just have a question about food — I've got you. What's on your mind? 😊"
         )
         yield sse({"type": "chunk", "text": msg})
         yield sse({"type": "done",  "text": msg})
@@ -381,7 +462,6 @@ def get_answer_stream(
         if db_session and session_id:
             try:
                 history = get_recent_messages(db_session, session_id, limit=10)
-                # get_recent_messages already returns dictionaries with 'question' and 'answer' keys
             except Exception as e:
                 logger.warning(f"Could not load history: {e}")
 
@@ -406,7 +486,7 @@ def get_answer_stream(
 
     except Exception as e:
         logger.error(f"❌ get_answer_stream error: {e}\n{traceback.format_exc()}")
-        err_msg = "I encountered an issue — please try again! 💪"
+        err_msg = "Something came up on my end — let's try that again in a second! 💪"
         yield sse({"type": "error", "text": err_msg})
 
 
@@ -439,4 +519,5 @@ def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
     except Exception as e:
         logger.error(f"❌ get_recent_messages error: {e}")
         return []
+
 
