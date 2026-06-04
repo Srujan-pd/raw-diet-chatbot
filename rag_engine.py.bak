@@ -309,67 +309,13 @@ FINAL REMINDERS
 """
 
 
-
-
-def get_user_plan_status(profile):
-    """Returns 'paid' if the user has an active plan, else 'free'."""
-    if not profile:
-        return 'free'
-    for key in ('subscription', 'plan', 'currentPlan'):
-        sub = profile.get(key) or {}
-        if isinstance(sub, dict):
-            status = str(sub.get('status', '') or sub.get('isActive', '')).lower()
-            if status in ('active', 'true', '1'):
-                return 'paid'
-    if profile.get('isSubscribed') or profile.get('isPaid') or profile.get('hasActivePlan'):
-        return 'paid'
-    if str(profile.get('planStatus', '')).lower() == 'active':
-        return 'paid'
-    return 'free'
-
-
-FREE_USER_ADDENDUM = """
-
-USER STATUS: NO ACTIVE PLAN
-------------------------------------------------------
-This user does NOT have an active paid diet plan yet.
-
-YOUR ROLE for this user:
-- Help them identify which plan category suits their goal and health profile
-- Explain the benefits of a paid plan (expert-designed, personalised, clinic-backed by Dr. Meghana)
-- Always guide them to the Plans section of the Raw Diet app to explore and purchase
-- Do NOT provide specific diet instructions, meal schedules, or recipes
-- Answer nutrition questions at a high level, then pivot to plan exploration
-
-Pivot example:
-"To build a proper structure around that goal, the Raw Diet app has expert plans from Dr. Meghana
-designed exactly for this. Explore the Plans tab in the app and pick one that fits your goal
-and budget. Want help figuring out which type suits you best?"
-"""
-
-PAID_USER_ADDENDUM = """
-
-USER STATUS: ACTIVE PAID PLAN
-------------------------------------------------------
-This user has an active paid diet plan.
-
-YOUR ROLE for this user:
-- Answer general nutrition and health questions warmly and helpfully
-- Help them stay motivated, understand healthy habits, hydration, and meal timing
-- Explain WHAT food types support their goal and WHY in general terms only
-- Do NOT generate, reproduce, or detail any meal plan, recipe, or diet chart
-- Their full plan and recipes are inside the app - direct them there for specifics
-- If they ask for their meal plan or recipes say:
-  "Your full plan with meal details and recipes is in the Plans tab of the app - everything is right there for you!"
-"""
-
 def build_prompt(
     user_message: str,
     profile: Optional[dict],
     chat_history: list,
     goal_hint: Optional[str] = None,
 ) -> str:
-    """Build the full prompt sent to Gemini, tailored to user plan status."""
+    """Build the full prompt sent to Gemini."""
     user_ctx = build_user_context(profile)
     goal_line = f"\nUser's stated goal: {goal_hint}" if goal_hint else ""
 
@@ -381,10 +327,7 @@ def build_prompt(
             turns.append(f"Trainer: {msg.get('answer', '')}")
         history_block = "\n=== RECENT CONVERSATION ===\n" + "\n".join(turns) + "\n===========================\n"
 
-    plan_status = get_user_plan_status(profile)
-    plan_addendum = PAID_USER_ADDENDUM if plan_status == 'paid' else FREE_USER_ADDENDUM
-
-    return f"""{SYSTEM_PROMPT}{plan_addendum}
+    return f"""{SYSTEM_PROMPT}
 
 {user_ctx}{goal_line}
 {history_block}
