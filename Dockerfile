@@ -24,7 +24,7 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy only chatbot Python files
-COPY main.py chat.py rag_engine.py database.py models.py whatsapp_redirect.py ./
+COPY main.py chat.py rag_engine.py database.py models.py whatsapp_redirect.py scheduler.py ./
 
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1

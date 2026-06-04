@@ -1,13 +1,14 @@
 import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from chat import router as chat_router
 from rag_engine import initialize_gemini
+from scheduler import run_daily_morning_messages
 
 # ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -142,6 +143,41 @@ async def root():
     })
 
 
+# ── Scheduler Endpoint ─────────────────────────────────────────────────────────
+
+SCHEDULER_SECRET = os.getenv("SCHEDULER_SECRET", "")
+
+
+@app.post("/scheduler/daily-morning")
+async def daily_morning_scheduler(request: Request):
+    """
+    Called by Google Cloud Scheduler every day at 7:00 AM IST.
+    Inserts a personalised morning message into each paid user's ChatSession.
+
+    Security: Requires X-Scheduler-Secret header matching SCHEDULER_SECRET env var.
+    Set this secret in Cloud Scheduler's request headers + Cloud Run env vars.
+
+    Cloud Scheduler config:
+      Schedule  : 30 1 * * *   (1:30 AM UTC = 7:00 AM IST)
+      URL       : https://your-chatbot-url.run.app/scheduler/daily-morning
+      Method    : POST
+      Auth      : Add header  X-Scheduler-Secret: <your_secret_value>
+    """
+    # ── Secret check — prevents random people from triggering the scheduler ──
+    if SCHEDULER_SECRET:
+        incoming = request.headers.get("X-Scheduler-Secret", "")
+        if incoming != SCHEDULER_SECRET:
+            logger.warning("⚠️ Scheduler called with wrong secret")
+            return JSONResponse(
+                status_code=403,
+                content={"error": "Forbidden"}
+            )
+
+    logger.info("⏰ Daily morning scheduler triggered")
+    result = run_daily_morning_messages()
+    return JSONResponse(result)
+
+
 # ── Error handler ──────────────────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -168,4 +204,3 @@ async def shutdown_tasks():
             logger.info("✅ Database connections closed")
     except Exception as e:
         logger.error(f"❌ Error during shutdown: {e}")
-
