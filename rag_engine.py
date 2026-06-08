@@ -488,30 +488,47 @@ def build_active_plan_context(profile: Optional[dict]) -> str:
 
 
 def build_available_plans_context(profile: Optional[dict]) -> str:
-    """For free users: list available plans they can explore."""
+    """
+    List available global plans from DB.
+    For free users: shown always (they have no active plan).
+    For paid users: shown when they ask about other plans.
+    Always filter to match user's food preferences when possible.
+    """
     avail = (profile or {}).get("availablePlans") or {}
     dp    = avail.get("dietPlans") or []
     rp    = avail.get("rationPlans") or []
+
+    # Also show for paid users if they have availablePlans populated
+    # (fetch_user_profile_db only populates availablePlans when no active plan exists,
+    #  so for paid users we skip this block — handled by active plan context instead)
     if not dp and not rp:
         return ""
+
+    # Get user food preferences to annotate matches
+    food  = (profile or {}).get("foodactivity") or {}
+    prefs = [p.lower() for p in (food.get("foodPreferences") or [])]
 
     lines = ["\n=== PLANS AVAILABLE IN THE RAW DIET APP ==="]
     if dp:
         lines.append("\nDiet Plans (Recipe-based):")
         for p in dp:
-            lines.append(f"  • {p.get('name', 'Unnamed')}")
-            if p.get("dietType"):   lines.append(f"    Diet: {p['dietType']}")
-            if p.get("duration"):   lines.append(f"    Duration: {p['duration']} days")
-            if p.get("calories"):   lines.append(f"    Calories: {p['calories']} kcal/day")
+            diet = (p.get("dietType") or "").lower()
+            match = " ✓ matches your diet" if diet and diet in prefs else ""
+            lines.append(f"  • {p.get('name', 'Unnamed')}{match}")
+            if p.get("dietType"):    lines.append(f"    Diet: {p['dietType']}")
+            if p.get("duration"):    lines.append(f"    Duration: {p['duration']} days")
+            if p.get("calories"):    lines.append(f"    Calories: {p['calories']} kcal/day")
             if p.get("description"): lines.append(f"    Info: {p['description']}")
     if rp:
         lines.append("\nRation Plans (Portion-based):")
         for p in rp:
-            lines.append(f"  • {p.get('name', 'Unnamed')}")
-            if p.get("dietType"):   lines.append(f"    Diet: {p['dietType']}")
-            if p.get("duration"):   lines.append(f"    Duration: {p['duration']} days")
+            diet = (p.get("dietType") or "").lower()
+            match = " ✓ matches your diet" if diet and diet in prefs else ""
+            lines.append(f"  • {p.get('name', 'Unnamed')}{match}")
+            if p.get("dietType"):    lines.append(f"    Diet: {p['dietType']}")
+            if p.get("duration"):    lines.append(f"    Duration: {p['duration']} days")
             if p.get("description"): lines.append(f"    Info: {p['description']}")
-    lines.append("\nRefer to plans by their exact name. Never invent plan names.")
+    lines.append("\nAlways refer to plans by their exact name above. Never invent plan names.")
     lines.append("===========================================")
     return "\n".join(lines)
 
@@ -521,7 +538,7 @@ def build_available_plans_context(profile: Optional[dict]) -> str:
 CLINIC_INFO = """
 === RED APPLE WELLNESS DIET CENTER ===
 Website : https://raw-diet.com/
-Founder : Dr. Meghana Kumare — Dietician & Sports Nutritionist | 20+ years
+Founder : Dr. Meghana Kumare Dietician & Sports Nutritionist | 20+ years
 Contact : +91 7774944783 | rawdiets@gmail.com
 Centers : Nagpur | Mumbai | Dubai
 =======================================
@@ -535,10 +552,10 @@ SYSTEM_PROMPT = f"""You are a warm nutrition guide at Red Apple Wellness Diet Ce
 RESPONSE LENGTH — HARD RULE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Maximum 3–4 sentences per response
-- NEVER start with "Hey [Name]!" — go straight to the answer
+- NEVER start with "Hey [Name]!" go straight to the answer
 - No long bullet lists (max 3 bullets if truly needed, one line each)
 - No repeating yourself
-- Be warm but brief — like a quick helpful text from a friend
+- Be warm but brief like a quick helpful text from a friend
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 PLAN-AWARE BEHAVIOUR
@@ -549,12 +566,12 @@ PAID USER (has active plan):
 - Reference the actual recipe/item names from the plan context provided
 - Never suggest foods outside their plan
 - If they ask about hunger/snack → check if SNACK meal exists in today's plan, suggest that item
-- If no snack in today's plan → "Your plan doesn't have a listed snack for today — try sipping water first and check the Plans tab for guidance."
+- If no snack in today's plan → "Your plan doesn't have a listed snack for today try sipping water first and check the Plans tab for guidance."
 
 FREE USER (no active plan):
 - Never suggest specific snacks, meals, or recipes
 - When asked what to eat or snack ideas → redirect to Plans tab
-- "To get meal and snack suggestions tailored to your goal, check out the Plans section in the app — that's where the expert-designed options are."
+- "To get meal and snack suggestions tailored to your goal, check out the Plans section in the app that's where the expert-designed options are."
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIET PLANS — RULE
@@ -585,7 +602,7 @@ FINAL REMINDERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Never contradict the user's allergies or dietary restrictions
 - Never mention competitor diet centers
-- Format links as plain URLs — not markdown
+- Format links as plain URLs not markdown
 - SHORT. WARM. PLAN-AWARE. Every time.
 """
 
@@ -805,7 +822,7 @@ Trainer response:"""
     except Exception as e:
         logger.error(f"❌ _hunger_response_paid Gemini error: {e}")
         return (
-            "Check your plan's meals in the Plans tab — pick the lightest item available "
+            "Check your plan's meals in the Plans tab pick the lightest item available "
             "and have some water alongside it! 💧"
         )
 
@@ -813,7 +830,7 @@ Trainer response:"""
 def _hunger_response_free(profile: dict) -> str:
     """
     For free users: use Gemini to give a short, enticing overview of available plans
-    and gently encourage them to get one — with actual plan names from DB.
+    and gently encourage them to get one with actual plan names from DB.
     """
     plans_text = _build_available_plans_text(profile)
 
@@ -890,12 +907,12 @@ def _greeting_response(profile: Optional[dict]) -> str:
         active = get_active_plan_summary(profile)
         pname  = active.get("name", "your plan") if active else "your plan"
         return (
-            f"Hey{addr}! 👋 Good to see you — you're on {pname} right now. "
+            f"Hey{addr}! 👋 Good to see you you're on {pname} right now. "
             f"What can I help you with today? 😊"
         )
     return (
         f"Hey{addr}! 👋 I'm your nutrition guide at Red Apple Wellness Diet Center. "
-        f"Whether it's weight loss, muscle gain, or eating better — I'm here to help. "
+        f"Whether it's weight loss, muscle gain, or eating better I'm here to help. "
         f"What's on your mind? 😊"
     )
 
@@ -907,8 +924,143 @@ def _consult_response(profile: Optional[dict]) -> str:
     addr     = f", {first}" if first else ""
     return (
         f"Sure{addr}! Dr. Meghana would be happy to help with a personal consultation. "
-        f"Reach her at +91 7774944783 or rawdiets@gmail.com — use the WhatsApp button in the app to connect directly. 😊"
+        f"Reach her at +91 7774944783 or rawdiets@gmail.com use the WhatsApp button in the app to connect directly. 😊"
     )
+
+
+# ── App navigation intents ────────────────────────────────────────────────────
+
+NAV_INTENTS = [
+    {
+        "id": "bmi_bmr",
+        "keywords": [
+            "bmi", "bmr", "body mass index", "basal metabolic rate",
+            "how to check bmi", "calculate bmi", "calculate bmr",
+            "bmi calculator", "bmr calculator", "health tools",
+            "check my bmi", "what is my bmi",
+        ],
+        "answer": (
+            "📊 *BMI & BMR Calculator*\n\n"
+            "Here's how to find it:\n"
+            "1️⃣ Go to the *Dashboard*\n"
+            "2️⃣ Tap on *Health Tools*\n"
+            "3️⃣ Select *BMI & BMR Calc*\n\n"
+            "There you can calculate your Body Mass Index and Basal Metabolic Rate "
+            "based on your current height and weight. It updates whenever you update your profile! 💪"
+        ),
+    },
+    {
+        "id": "water_tracker",
+        "keywords": [
+            "water tracker", "track water", "water intake", "log water",
+            "how to track water", "water goal", "daily water",
+            "where is water", "water log", "hydration tracker",
+            "how much water", "water reminder",
+        ],
+        "answer": (
+            "💧 *Water Tracker*\n\n"
+            "Here's how to log your water intake:\n"
+            "1️⃣ Go to the *Home* tab\n"
+            "2️⃣ Tap on *Water Tracker*\n\n"
+            "You can log every glass you drink throughout the day and track it "
+            "against your daily water goal. Staying hydrated is a huge part of your plan! 🌊"
+        ),
+    },
+    {
+        "id": "progress",
+        "keywords": [
+            "my progress", "check progress", "view progress", "track progress",
+            "how to see progress", "diet progress", "progress report",
+            "progress tracker", "where is my progress", "see my progress",
+            "progress chart", "how am i doing",
+        ],
+        "answer": (
+            "📈 *My Progress*\n\n"
+            "Here's how to review your diet progress:\n"
+            "1️⃣ Go to the *Home* tab\n"
+            "2️⃣ Tap on *My Progress*\n\n"
+            "You'll see a full overview of your diet plan progress — "
+            "days completed, meals followed, and how far you've come on your journey. "
+            "Keep going, every day counts! 🏆"
+        ),
+    },
+    {
+        "id": "explore_plans",
+        "keywords": [
+            "explore plans", "find plans", "browse plans", "see plans",
+            "available plans", "diet plans", "which plans", "show me plans",
+            "how to buy plan", "how to activate plan", "purchase plan",
+            "where to buy", "explore diet", "check plans", "view plans",
+            "how to find plan", "where are plans",
+        ],
+        "answer": (
+            "🥗 *Explore Diet Plans*\n\n"
+            "Here's how to find and activate a plan:\n"
+            "1️⃣ Tap the *Diet* tab at the bottom of the screen\n"
+            "2️⃣ Browse all available plans and filter by your goal or diet type\n"
+            "3️⃣ Tap any plan to see full details — duration, meals, and what's included\n"
+            "4️⃣ Purchase the plan that fits you to activate it instantly ✅\n\n"
+            "Once active, your plan meals will appear in the Home tab every day. "
+            "Not sure which plan suits you? Just ask me and I'll help you choose! 😊"
+        ),
+    },
+    {
+        "id": "recipes",
+        "keywords": [
+            "recipe", "recipes", "find recipe", "browse recipe", "see recipes",
+            "where are recipes", "how to find recipe", "recipe tab",
+            "different recipes", "check recipes", "all recipes",
+            "recipe list", "view recipes", "explore recipes",
+        ],
+        "answer": (
+            "🍳 *Recipes*\n\n"
+            "Here's how to explore all recipes:\n"
+            "1️⃣ Tap the *Recipe* tab at the bottom of the screen\n"
+            "2️⃣ Browse hundreds of recipes filter by meal type, diet preference, or ingredients\n"
+            "3️⃣ Tap any recipe to see full ingredients, step-by-step instructions, and nutrition info\n\n"
+            "You can also swap recipes within your active plan if you want variety. "
+            "Found something you like? Your plan's meals are always a good starting point! 😋"
+        ),
+    },
+    {
+        "id": "health_profile",
+        "keywords": [
+            "update health", "health updates", "add health", "remove health",
+            "update profile", "edit profile", "health profile",
+            "change my details", "update my details", "edit my details",
+            "update weight", "update height", "health conditions",
+            "profile settings", "where to update", "how to update profile",
+            "change health info", "medical details",
+        ],
+        "answer": (
+            "👤 *Health Profile*\n\n"
+            "Here's how to update your health details:\n"
+            "1️⃣ Go to your *Profile* (tap your profile icon)\n"
+            "2️⃣ You can add or update:\n"
+            "   • Weight & height\n"
+            "   • Health conditions\n"
+            "   • Diet preferences & allergies\n"
+            "   • Activity level and sleep habits\n"
+            "3️⃣ Save your changes and the AI will use your latest details instantly ✅\n\n"
+            "Keeping your profile updated ensures your plan and guidance stay accurate for you!"
+        ),
+    },
+]
+
+
+def is_nav_intent(message: str) -> Optional[str]:
+    """
+    Check if message matches a navigation intent.
+    Returns the answer string if matched, else None.
+    Checks all keywords across all nav intents.
+    """
+    msg = message.lower().strip()
+    for intent in NAV_INTENTS:
+        for kw in intent["keywords"]:
+            if kw in msg:
+                logger.info(f"✅ Nav intent matched: {intent['id']} (keyword: '{kw}')")
+                return intent["answer"]
+    return None
 
 
 # ── Main answer functions ──────────────────────────────────────────────────────
@@ -941,7 +1093,7 @@ def get_answer(
     global gemini_client
 
     if gemini_client is None:
-        return "Having a little trouble connecting right now — give it a moment and try again! 🙏"
+        return "Having a little trouble connecting right now give it a moment and try again! 🙏"
 
     profile = _load_profile(firebase_uid, firebase_token)
 
@@ -953,6 +1105,10 @@ def get_answer(
 
     if is_hunger_intent(question):
         return _hunger_response(profile)
+
+    nav_answer = is_nav_intent(question)
+    if nav_answer:
+        return nav_answer
 
     try:
         history = []
@@ -976,7 +1132,7 @@ def get_answer(
 
     except Exception as e:
         logger.error(f"❌ get_answer error: {e}\n{traceback.format_exc()}")
-        return "Something came up on my end — let's try that again in a second! 💪"
+        return "Something came up on my end let's try that again in a second! 💪"
 
 
 def get_answer_stream(
@@ -992,7 +1148,7 @@ def get_answer_stream(
         return f"data: {_j.dumps(payload)}\n\n"
 
     if gemini_client is None:
-        msg = "Having a little trouble connecting right now — give it a moment and try again! 🙏"
+        msg = "Having a little trouble connecting right now give it a moment and try again! 🙏"
         yield sse({"type": "chunk", "text": msg})
         yield sse({"type": "done",  "text": ""})
         return
@@ -1002,19 +1158,25 @@ def get_answer_stream(
     if is_greeting(question):
         msg = _greeting_response(profile)
         yield sse({"type": "chunk", "text": msg})
-        yield sse({"type": "done",  "text": ""})
+        yield sse({"type": "done",  "text": "", "full_text": msg})
         return
 
     if is_consult_intent(question):
         msg = _consult_response(profile)
         yield sse({"type": "chunk", "text": msg})
-        yield sse({"type": "done",  "text": ""})
+        yield sse({"type": "done",  "text": "", "full_text": msg})
         return
 
     if is_hunger_intent(question):
         msg = _hunger_response(profile)
         yield sse({"type": "chunk", "text": msg})
-        yield sse({"type": "done",  "text": ""})
+        yield sse({"type": "done",  "text": "", "full_text": msg})
+        return
+
+    nav_answer = is_nav_intent(question)
+    if nav_answer:
+        yield sse({"type": "chunk", "text": nav_answer})
+        yield sse({"type": "done",  "text": "", "full_text": nav_answer})
         return
 
     try:
@@ -1041,11 +1203,13 @@ def get_answer_stream(
 
         final = _truncate_gemini_answer(accumulated.strip())
         logger.info(f"✅ Stream complete ({len(final)} chars)")
-        yield sse({"type": "done", "text": ""})
+        # full_text is used by main.py to save to DB
+        # text is empty so the frontend does NOT render it again (prevents duplicate)
+        yield sse({"type": "done", "text": "", "full_text": final})
 
     except Exception as e:
         logger.error(f"❌ get_answer_stream error: {e}\n{traceback.format_exc()}")
-        yield sse({"type": "error", "text": "Something came up on my end — let's try that again in a second! 💪"})
+        yield sse({"type": "error", "text": "Something came up on my end let's try that again in a second! 💪"})
 
 
 def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
