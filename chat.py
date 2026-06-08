@@ -25,8 +25,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db_session, SessionLocal
 from models import ChatMessage, ChatSession, MessageRole
-from rag_engine import get_answer, get_answer_stream, fetch_user_profile
-from whatsapp_redirect import build_whatsapp_url
+from rag_engine import get_answer, get_answer_stream, fetch_user_profile, is_consult_intent
+from whatsapp_redirect import build_whatsapp_url, build_whatsapp_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["Chat"])
@@ -191,15 +191,22 @@ def get_recent_history(db, session_id, limit: int = 10) -> list[dict]:
 
 # ── WhatsApp URL helper ────────────────────────────────────────────────────────
 
-def get_whatsapp_url_for_request(msg: str, token: Optional[str]) -> Optional[str]:
+def get_whatsapp_url_for_request(msg: str, token: Optional[str], firebase_uid: Optional[str] = None, db=None) -> Optional[str]:
     """
-    Builds a wa.me URL pre-filled with the user's full profile.
-    Returns None when the WhatsApp CTA is not relevant for this message.
+    Returns a wa.me URL ONLY when user explicitly wants to consult Dr. Meghana.
+    Not for every diet question — only consult/contact/appointment intent.
+    Profile is fetched from DB (richer data) with fallback to API.
     """
-    if is_greeting(msg) or not should_attach_whatsapp(msg):
+    if not is_consult_intent(msg):
         return None
     try:
-        profile = fetch_user_profile(token)
+        # Try DB first for complete data including plans
+        profile = None
+        if firebase_uid and db:
+            from rag_engine import fetch_user_profile_db
+            profile = fetch_user_profile_db(firebase_uid, db)
+        if not profile:
+            profile = fetch_user_profile(token)
         return build_whatsapp_url(profile)
     except Exception as e:
         logger.warning(f"⚠️ Could not build WhatsApp URL: {e}")
@@ -274,11 +281,12 @@ async def chat_main(
             session_id=str(chat_session.id),
             db_session=db,
             firebase_token=token,
+            firebase_uid=firebase_uid,
         )
         save_exchange(db, chat_session, msg, reply)
 
-        # ── Attach WhatsApp URL when the topic warrants it ────────────────────
-        wa_url = get_whatsapp_url_for_request(msg, token)
+        # ── WhatsApp URL only on consult intent ───────────────────────────────
+        wa_url = get_whatsapp_url_for_request(msg, token, firebase_uid, db)
         result = {
             "message":    reply,
             "session_id": str(chat_session.id),
@@ -307,10 +315,7 @@ async def chat_stream(
     db:           Session       = Depends(get_db_session),
 ):
     """
-    Streams SSE chunks. The final `done` event includes `whatsapp_url` when relevant:
-      data: {"type": "done", "text": "...", "session_id": "...", "whatsapp_url": "https://wa.me/..."}
-
-    Frontend should render the WhatsApp button when it sees `whatsapp_url` in the done event.
+    Streams SSE chunks. The final `done` event includes `whatsapp_url` when relevant.
     """
     try:
         firebase_uid = firebase_uid or extract_firebase_uid(request)
@@ -324,8 +329,8 @@ async def chat_stream(
         sid_str      = str(chat_session.id)
         _set_cookie(response, sid_str)
 
-        # Pre-compute WhatsApp URL (based on message topic)
-        wa_url = get_whatsapp_url_for_request(msg, token)
+        # WhatsApp URL only on consult intent
+        wa_url = get_whatsapp_url_for_request(msg, token, firebase_uid, db)
 
         # Stream AI's answer
         async def generate():
@@ -338,6 +343,7 @@ async def chat_stream(
                     session_id=sid_str,
                     db_session=db_session,
                     firebase_token=token,
+                    firebase_uid=firebase_uid,
                 )):
                     raw = chunk.strip()
                     if not raw.startswith("data:"):
@@ -355,7 +361,31 @@ async def chat_stream(
 
                     elif evt.get("type") == "done":
                         final = evt.get("text", final)
-                        save_exchange(db_session, chat_session, msg, final)
+                        # ─── FIX: Properly save to database ───
+                        try:
+                            # Attach the session to the current db_session
+                            attached_session = db_session.merge(chat_session)
+                            # Create new messages
+                            user_msg = ChatMessage(
+                                sessionId=attached_session.id,
+                                role=MessageRole.USER,
+                                content=msg
+                            )
+                            assistant_msg = ChatMessage(
+                                sessionId=attached_session.id,
+                                role=MessageRole.ASSISTANT,
+                                content=final
+                            )
+                            db_session.add_all([user_msg, assistant_msg])
+                            db_session.commit()
+                            logger.info(f"✅ Saved stream messages for session {sid_str}")
+                        except Exception as save_err:
+                            logger.error(f"❌ Failed to save exchange: {save_err}")
+                            try:
+                                db_session.rollback()
+                            except:
+                                pass
+                        # ──────────────────────────────────────
                         done_payload = {
                             "type":       "done",
                             "text":       final,
@@ -437,4 +467,3 @@ async def chat_history(
             for m in messages
         ],
     }
-

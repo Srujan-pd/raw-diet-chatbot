@@ -1,12 +1,12 @@
 """
 rag_engine.py — AI answer engine for Raw Diet Personal Trainer chatbot.
 
-Uses Gemini as the core LLM. The "knowledge base" here is the user's profile
-fetched from the Raw Diet backend API (identity, health conditions, food activity).
-No vector store / FAISS required — all context is assembled dynamically from:
-  1. User profile from Raw Diet API (via Firebase UID passed in headers)
-  2. General nutrition & fitness knowledge baked into the Gemini prompt
-  3. Conversation history for multi-turn context
+Context sources (all from DB):
+  1. User profile: Identity, HealthConditions, FoodActivity, FamilyHealth
+  2. Active plan: UserDietPlan → DietPlan → DietDay → Meal → MealRecipe → Recipe
+                  UserRationPlan → RationPlan → RationDay → RationMeal → RationMealItem
+  3. Available plans (for free users): DietPlan + RationPlan (ACTIVE, isGlobal)
+  4. Conversation history: ChatMessage
 """
 
 import os
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ── Gemini client singleton ────────────────────────────────────────────────────
 gemini_client = None
+GEMINI_MODEL  = "gemini-2.5-flash"
 
 
 def initialize_gemini() -> bool:
@@ -39,16 +40,16 @@ def initialize_gemini() -> bool:
         return False
 
 
-# ── Raw Diet backend API helpers ───────────────────────────────────────────────
+# ── Raw Diet backend API (fallback only) ──────────────────────────────────────
 
-RAW_DIET_API_BASE = os.getenv("RAW_DIET_API_BASE", "https://test---raw-diet-backend-5rnsarrnya-uc.a.run.app")
+RAW_DIET_API_BASE = os.getenv(
+    "RAW_DIET_API_BASE",
+    "https://test---raw-diet-backend-5rnsarrnya-uc.a.run.app"
+)
 
 
 def fetch_user_profile(firebase_token: Optional[str]) -> Optional[dict]:
-    """
-    Fetch the user's full profile from the Raw Diet backend using their Firebase JWT.
-    Returns None if token is missing or request fails.
-    """
+    """Fallback: fetch profile from backend API using Firebase JWT."""
     if not firebase_token:
         return None
     try:
@@ -66,110 +67,452 @@ def fetch_user_profile(firebase_token: Optional[str]) -> Optional[dict]:
         return None
 
 
+from sqlalchemy import text as sql_text
+
+
+# ── DB profile fetch (primary) ────────────────────────────────────────────────
+
+def fetch_user_profile_db(firebase_uid: Optional[str], db) -> Optional[dict]:
+    """
+    Fetch full user context from DB:
+      - Identity, HealthConditions, FoodActivity, FamilyHealth
+      - Active DietPlan (with today's meals + recipes)
+      - Active RationPlan (with today's meals + items)
+      - Available global plans (for free users)
+    """
+    if not firebase_uid or not db:
+        return None
+    try:
+        # ── User row ──────────────────────────────────────────────────────────
+        user_row = db.execute(
+            sql_text('SELECT id, email, "isOnboarded" FROM "User" WHERE "firebaseUid" = :uid LIMIT 1'),
+            {"uid": firebase_uid}
+        ).fetchone()
+        if not user_row:
+            return None
+
+        user_id = user_row[0]
+        profile = {"id": user_id, "email": user_row[1], "isOnboarded": user_row[2]}
+
+        # ── Identity ──────────────────────────────────────────────────────────
+        irow = db.execute(sql_text("""
+            SELECT "fullName", age, gender, "heightCm", "weightKg",
+                   "bloodGroup", "maritalStatus", occupation, address, contact
+            FROM "Identity" WHERE "userId" = :uid LIMIT 1
+        """), {"uid": user_id}).fetchone()
+        if irow:
+            profile["identity"] = {
+                "fullName": irow[0], "age": irow[1], "gender": irow[2],
+                "heightCm": irow[3], "weightKg": irow[4], "bloodGroup": irow[5],
+                "maritalStatus": irow[6], "occupation": irow[7],
+                "address": irow[8], "contact": irow[9],
+            }
+
+        # ── HealthConditions ──────────────────────────────────────────────────
+        hrow = db.execute(sql_text("""
+            SELECT conditions, "otherDetails", "treatmentTaken",
+                   "menstrualHistory", "bowelBladder", "sleepTime", "sleepQuality"
+            FROM "HealthConditions" WHERE "userId" = :uid LIMIT 1
+        """), {"uid": user_id}).fetchone()
+        if hrow:
+            profile["health"] = {
+                "conditions": hrow[0] or [], "otherDetails": hrow[1],
+                "treatmentTaken": hrow[2], "menstrualHistory": hrow[3],
+                "bowelBladder": hrow[4], "sleepTime": hrow[5], "sleepQuality": hrow[6],
+            }
+
+        # ── FoodActivity ──────────────────────────────────────────────────────
+        frow = db.execute(sql_text("""
+            SELECT "foodPreferences", allergies, cravings, "dietaryRestrictions",
+                   "activityLevel", activities, morning, breakfast, lunch, snacks, dinner
+            FROM "FoodActivity" WHERE "userId" = :uid LIMIT 1
+        """), {"uid": user_id}).fetchone()
+        if frow:
+            profile["foodactivity"] = {
+                "foodPreferences": frow[0] or [], "allergies": frow[1] or [],
+                "cravings": frow[2], "dietaryRestrictions": frow[3],
+                "activityLevel": frow[4], "activities": frow[5] or [],
+                "morning": frow[6], "breakfast": frow[7],
+                "lunch": frow[8], "snacks": frow[9], "dinner": frow[10],
+            }
+
+        # ── FamilyHealth ──────────────────────────────────────────────────────
+        farow = db.execute(sql_text("""
+            SELECT "familyType", members, "familyHistory", "waterIntake"
+            FROM "FamilyHealth" WHERE "userId" = :uid LIMIT 1
+        """), {"uid": user_id}).fetchone()
+        if farow:
+            profile["familyHealth"] = {
+                "familyType": farow[0], "members": farow[1],
+                "familyHistory": farow[2], "waterIntake": farow[3],
+            }
+
+        # ── Active DietPlan ───────────────────────────────────────────────────
+        # UserDietPlan → DietPlan
+        udp_row = db.execute(sql_text("""
+            SELECT udp.id, udp."planId", udp."currentDay", udp."startDate",
+                   dp.name, dp.description, dp."dietType", dp.calories,
+                   dp.protein, dp.duration
+            FROM "UserDietPlan" udp
+            JOIN "DietPlan" dp ON dp.id = udp."planId"
+            WHERE udp."userId" = :uid AND udp."isActive" = true
+            LIMIT 1
+        """), {"uid": user_id}).fetchone()
+
+        if udp_row:
+            current_day = udp_row[2] or 1
+            profile["activeDietPlan"] = {
+                "userPlanId":   udp_row[0],
+                "planId":       udp_row[1],
+                "currentDay":   current_day,
+                "startDate":    str(udp_row[3]),
+                "name":         udp_row[4],
+                "description":  udp_row[5],
+                "dietType":     udp_row[6],
+                "calories":     udp_row[7],
+                "protein":      udp_row[8],
+                "duration":     udp_row[9],
+                "todayMeals":   [],
+            }
+
+            # Fetch today's DietDay meals + recipes
+            day_row = db.execute(sql_text("""
+                SELECT dd.id FROM "DietDay" dd
+                WHERE dd."planId" = :pid AND dd."dayNumber" = :day
+                LIMIT 1
+            """), {"pid": udp_row[1], "day": current_day}).fetchone()
+
+            if day_row:
+                meals = db.execute(sql_text("""
+                    SELECT m.id, m.type FROM "Meal" m
+                    WHERE m."dayId" = :did
+                    ORDER BY m.type
+                """), {"did": day_row[0]}).fetchall()
+
+                today_meals = []
+                for meal in meals:
+                    recipes = db.execute(sql_text("""
+                        SELECT r.name, r.calories, r."prepTimeMin",
+                               r."proteinG", r."carbsG", r."fatG",
+                               r.description
+                        FROM "MealRecipe" mr
+                        JOIN "Recipe" r ON r.id = mr."recipeId"
+                        WHERE mr."mealId" = :mid
+                        ORDER BY mr."isPrimary" DESC
+                    """), {"mid": meal[0]}).fetchall()
+
+                    today_meals.append({
+                        "mealType": meal[1],
+                        "recipes": [
+                            {
+                                "name":        r[0],
+                                "calories":    r[1],
+                                "prepTimeMin": r[2],
+                                "proteinG":    r[3],
+                                "carbsG":      r[4],
+                                "fatG":        r[5],
+                                "description": r[6],
+                            }
+                            for r in recipes
+                        ],
+                    })
+                profile["activeDietPlan"]["todayMeals"] = today_meals
+
+        # ── Active RationPlan ─────────────────────────────────────────────────
+        # UserRationPlan → RationPlan
+        urp_row = db.execute(sql_text("""
+            SELECT urp.id, urp."planId", urp."startDate",
+                   rp.name, rp.description, rp."dietType", rp.duration,
+                   rp."specialComments", rp."waterIntake", rp."oilLimit",
+                   rp."gheeLimit", rp."allowedDrinks"
+            FROM "UserRationPlan" urp
+            JOIN "RationPlan" rp ON rp.id = urp."planId"
+            WHERE urp."userId" = :uid AND urp."isActive" = true
+            LIMIT 1
+        """), {"uid": user_id}).fetchone()
+
+        if urp_row:
+            # Calculate current day from startDate
+            from datetime import datetime, timezone
+            start = urp_row[2]
+            if hasattr(start, 'replace'):
+                start = start.replace(tzinfo=None)
+            current_day_r = max(1, (datetime.utcnow() - start).days + 1) if start else 1
+
+            profile["activeRationPlan"] = {
+                "userPlanId":      urp_row[0],
+                "planId":          urp_row[1],
+                "startDate":       str(urp_row[2]),
+                "currentDay":      current_day_r,
+                "name":            urp_row[3],
+                "description":     urp_row[4],
+                "dietType":        urp_row[5],
+                "duration":        urp_row[6],
+                "specialComments": urp_row[7],
+                "waterIntake":     urp_row[8],
+                "oilLimit":        urp_row[9],
+                "gheeLimit":       urp_row[10],
+                "allowedDrinks":   urp_row[11] or [],
+                "todayMeals":      [],
+            }
+
+            # Fetch today's RationDay meals + items
+            rday_row = db.execute(sql_text("""
+                SELECT rd.id FROM "RationDay" rd
+                WHERE rd."planId" = :pid AND rd."dayNumber" = :day
+                LIMIT 1
+            """), {"pid": urp_row[1], "day": current_day_r}).fetchone()
+
+            if rday_row:
+                rmeals = db.execute(sql_text("""
+                    SELECT rm.id, rm.type, rm.title, rm.time
+                    FROM "RationMeal" rm
+                    WHERE rm."dayId" = :did
+                    ORDER BY rm."sortOrder", rm.type
+                """), {"did": rday_row[0]}).fetchall()
+
+                today_rmeals = []
+                for rmeal in rmeals:
+                    items = db.execute(sql_text("""
+                        SELECT rmi.name, rmi.quantity, rmi.unit,
+                               rmi.notes, rmi.instruction, rmi.category
+                        FROM "RationMealItem" rmi
+                        WHERE rmi."mealId" = :mid
+                        ORDER BY rmi."createdAt"
+                    """), {"mid": rmeal[0]}).fetchall()
+
+                    today_rmeals.append({
+                        "mealType": rmeal[1],
+                        "title":    rmeal[2],
+                        "time":     rmeal[3],
+                        "items": [
+                            {
+                                "name":        item[0],
+                                "quantity":    item[1],
+                                "unit":        item[2],
+                                "notes":       item[3],
+                                "instruction": item[4],
+                                "category":    item[5],
+                            }
+                            for item in items
+                        ],
+                    })
+                profile["activeRationPlan"]["todayMeals"] = today_rmeals
+
+        # ── Available global plans (for free / non-active users) ──────────────
+        if not profile.get("activeDietPlan") and not profile.get("activeRationPlan"):
+            dp_rows = db.execute(sql_text("""
+                SELECT id, name, description, "dietType", duration, calories
+                FROM "DietPlan"
+                WHERE status = 'ACTIVE' AND "isGlobal" = true
+                ORDER BY "createdAt" DESC
+                LIMIT 10
+            """)).fetchall()
+
+            rp_rows = db.execute(sql_text("""
+                SELECT id, name, description, "dietType", duration
+                FROM "RationPlan"
+                WHERE status = 'ACTIVE' AND "isGlobal" = true
+                ORDER BY "createdAt" DESC
+                LIMIT 10
+            """)).fetchall()
+
+            if dp_rows or rp_rows:
+                profile["availablePlans"] = {
+                    "dietPlans": [
+                        {
+                            "id": r[0], "name": r[1], "description": r[2],
+                            "dietType": r[3], "duration": r[4], "calories": r[5],
+                        }
+                        for r in dp_rows
+                    ],
+                    "rationPlans": [
+                        {
+                            "id": r[0], "name": r[1], "description": r[2],
+                            "dietType": r[3], "duration": r[4],
+                        }
+                        for r in rp_rows
+                    ],
+                }
+
+        logger.info(f"✅ DB profile fetched for user {user_id}")
+        return profile
+
+    except Exception as e:
+        logger.warning(f"⚠️ fetch_user_profile_db failed: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
+# ── Plan status helpers ────────────────────────────────────────────────────────
+
+def get_user_plan_status(profile) -> str:
+    """'paid' if user has an active DietPlan or RationPlan, else 'free'."""
+    if not profile:
+        return 'free'
+    if profile.get("activeDietPlan") or profile.get("activeRationPlan"):
+        return 'paid'
+    return 'free'
+
+
+def get_active_plan_summary(profile) -> Optional[dict]:
+    """Return whichever active plan exists (DietPlan takes priority)."""
+    return profile.get("activeDietPlan") or profile.get("activeRationPlan")
+
+
+# ── Context builders ──────────────────────────────────────────────────────────
+
 def build_user_context(profile: Optional[dict]) -> str:
-    """
-    Convert a user profile dict (from GET /api/users/me) into a plain-text
-    context block for the AI prompt.
-    Covers every field from the Prisma schema:
-      Identity, HealthConditions, FoodActivity, FamilyHealth
-    """
     if not profile:
         return "No user profile available. Answer as a general diet and fitness expert."
 
     lines = ["=== USER PROFILE ==="]
 
-    # ── Identity ──────────────────────────────────────────────────────────────
     identity = profile.get("identity") or {}
     name = identity.get("fullName") or profile.get("name") or "the user"
     lines.append(f"Name: {name}")
-
-    if identity.get("age"):
-        lines.append(f"Age: {identity['age']} years")
-    if identity.get("gender"):
-        lines.append(f"Gender: {identity['gender']}")
-    if identity.get("maritalStatus"):
-        lines.append(f"Marital Status: {identity['maritalStatus']}")
-    if identity.get("occupation"):
-        lines.append(f"Occupation: {identity['occupation']}")
-    if identity.get("address"):
-        lines.append(f"Address: {identity['address']}")
+    if identity.get("age"):       lines.append(f"Age: {identity['age']} years")
+    if identity.get("gender"):    lines.append(f"Gender: {identity['gender']}")
+    if identity.get("heightCm"):  lines.append(f"Height: {identity['heightCm']} cm")
+    if identity.get("weightKg"):  lines.append(f"Weight: {identity['weightKg']} kg")
+    h, w = identity.get("heightCm"), identity.get("weightKg")
+    if h and w:
+        lines.append(f"BMI: {round(w / ((h / 100) ** 2), 1)} (calculated)")
     if identity.get("bloodGroup"):
         bg = identity["bloodGroup"].replace("_POS", "+").replace("_NEG", "-")
         lines.append(f"Blood Group: {bg}")
+    if identity.get("occupation"):    lines.append(f"Occupation: {identity['occupation']}")
+    if identity.get("maritalStatus"): lines.append(f"Marital Status: {identity['maritalStatus']}")
 
-    height_cm = identity.get("heightCm")
-    weight_kg = identity.get("weightKg")
-    if height_cm:
-        lines.append(f"Height: {height_cm} cm")
-    if weight_kg:
-        lines.append(f"Weight: {weight_kg} kg")
-    if height_cm and weight_kg:
-        bmi = round(weight_kg / ((height_cm / 100) ** 2), 1)
-        lines.append(f"BMI: {bmi} (calculated)")
-
-    # ── Health Conditions ─────────────────────────────────────────────────────
     health = profile.get("health") or {}
     if health:
         conds = health.get("conditions") or []
         lines.append(f"Health Conditions: {', '.join(conds) if conds else 'None'}")
-        if health.get("otherDetails"):
-            lines.append(f"Other Health Details: {health['otherDetails']}")
-        if health.get("treatmentTaken"):
-            lines.append(f"Treatment Taken: {health['treatmentTaken']}")
-        if health.get("menstrualHistory"):
-            lines.append(f"Menstrual/Obstetrics History: {health['menstrualHistory']}")
-        if health.get("bowelBladder"):
-            lines.append(f"Bowel/Bladder Habits: {health['bowelBladder']}")
-        if health.get("sleepTime"):
-            lines.append(f"Sleep Time: {health['sleepTime']}")
-        if health.get("sleepQuality"):
-            lines.append(f"Sleep Quality: {health['sleepQuality']}")
+        if health.get("sleepQuality"): lines.append(f"Sleep Quality: {health['sleepQuality']}")
+        if health.get("sleepTime"):    lines.append(f"Sleep Time: {health['sleepTime']}")
 
-    # ── Food & Activity ───────────────────────────────────────────────────────
     food = profile.get("foodactivity") or {}
     if food:
-        prefs = food.get("foodPreferences") or profile.get("Diet") or []
-        if prefs:
-            lines.append(f"Diet Type: {', '.join(p.replace('_', '-') for p in prefs)}")
-        allergies = food.get("allergies") or profile.get("allergies") or []
-        if allergies:
-            lines.append(f"Allergies / Intolerances: {', '.join(allergies)}")
-        if food.get("cravings"):
-            lines.append(f"Addictions / Cravings: {food['cravings']}")
-        if food.get("dietaryRestrictions"):
-            lines.append(f"Dietary Restrictions & Dislikes: {food['dietaryRestrictions']}")
+        prefs = food.get("foodPreferences") or []
+        if prefs: lines.append(f"Diet Type: {', '.join(p.replace('_', '-') for p in prefs)}")
+        allergies = food.get("allergies") or []
+        if allergies: lines.append(f"Allergies: {', '.join(allergies)}")
         if food.get("activityLevel"):
             lines.append(f"Activity Level: {food['activityLevel'].replace('_', ' ')}")
         acts = food.get("activities") or []
-        if acts:
-            lines.append(f"Activities: {', '.join(a.replace('_', ' ') for a in acts)}")
-        # Current daily menu
-        for meal_key, meal_label in [
-            ("morning", "Morning"), ("breakfast", "Breakfast"),
-            ("lunch", "Lunch"), ("snacks", "Hi-tea/Snacks"), ("dinner", "Dinner"),
-        ]:
-            if food.get(meal_key):
-                lines.append(f"Current {meal_label}: {food[meal_key]}")
+        if acts: lines.append(f"Activities: {', '.join(a.replace('_', ' ') for a in acts)}")
+        if food.get("cravings"):            lines.append(f"Cravings: {food['cravings']}")
+        if food.get("dietaryRestrictions"): lines.append(f"Dietary Restrictions: {food['dietaryRestrictions']}")
 
-    # ── Family Health ─────────────────────────────────────────────────────────
     family = profile.get("familyHealth") or {}
     if family:
-        if family.get("familyType"):
-            lines.append(f"Family Type: {family['familyType']}")
-        if family.get("members"):
-            lines.append(f"Family Members: {family['members']}")
-        if family.get("familyHistory"):
-            lines.append(f"Family History of Illness: {family['familyHistory']}")
         if family.get("waterIntake"):
             wi_map = {
-                "LESS_THAN_1L": "<1 Litre/day",
-                "ONE_TO_TWO_L": "1–2 Litres/day",
-                "TWO_TO_THREE_L": "2–3 Litres/day",
-                "MORE_THAN_3L": ">3 Litres/day",
+                "LESS_THAN_1L": "<1 L/day", "ONE_TO_TWO_L": "1–2 L/day",
+                "TWO_TO_THREE_L": "2–3 L/day", "MORE_THAN_3L": ">3 L/day",
             }
             lines.append(f"Water Intake: {wi_map.get(family['waterIntake'], family['waterIntake'])}")
 
     lines.append("===================")
+    return "\n".join(lines)
+
+
+def build_active_plan_context(profile: Optional[dict]) -> str:
+    """Build today's meal context from whichever active plan the user has."""
+    if not profile:
+        return ""
+
+    lines = []
+
+    # ── DietPlan (Recipe-based) ───────────────────────────────────────────────
+    adp = profile.get("activeDietPlan")
+    if adp:
+        lines.append("\n=== YOUR ACTIVE DIET PLAN ===")
+        lines.append(f"Plan Name  : {adp.get('name', 'Your Plan')}")
+        if adp.get("description"): lines.append(f"Description: {adp['description']}")
+        if adp.get("dietType"):    lines.append(f"Diet Type  : {adp['dietType']}")
+        if adp.get("calories"):    lines.append(f"Target Cal : {adp['calories']} kcal/day")
+        if adp.get("protein"):     lines.append(f"Target Prot: {adp['protein']} g/day")
+        lines.append(f"Day        : {adp.get('currentDay', 1)} of {adp.get('duration', '?')}")
+
+        today_meals = adp.get("todayMeals") or []
+        if today_meals:
+            lines.append(f"\nToday's Meals (Day {adp.get('currentDay', 1)}):")
+            for meal in today_meals:
+                lines.append(f"\n  [{meal['mealType']}]")
+                for r in meal.get("recipes") or []:
+                    cal  = f" • {r['calories']} kcal" if r.get("calories") else ""
+                    prot = f" • {r['proteinG']}g protein" if r.get("proteinG") else ""
+                    lines.append(f"    - {r['name']}{cal}{prot}")
+                    if r.get("description"):
+                        lines.append(f"      ({r['description']})")
+        else:
+            lines.append("  (No meal data for today yet)")
+        lines.append("==============================")
+
+    # ── RationPlan (Item-based) ───────────────────────────────────────────────
+    arp = profile.get("activeRationPlan")
+    if arp:
+        lines.append("\n=== YOUR ACTIVE RATION PLAN ===")
+        lines.append(f"Plan Name: {arp.get('name', 'Your Plan')}")
+        if arp.get("description"):     lines.append(f"Description: {arp['description']}")
+        if arp.get("specialComments"): lines.append(f"Notes: {arp['specialComments']}")
+        if arp.get("waterIntake"):     lines.append(f"Water Target: {arp['waterIntake']}")
+        if arp.get("oilLimit"):        lines.append(f"Oil Limit: {arp['oilLimit']}")
+        if arp.get("gheeLimit"):       lines.append(f"Ghee Limit: {arp['gheeLimit']}")
+        drinks = arp.get("allowedDrinks") or []
+        if drinks: lines.append(f"Allowed Drinks: {', '.join(drinks)}")
+        lines.append(f"Day: {arp.get('currentDay', 1)} of {arp.get('duration', '?')}")
+
+        today_rmeals = arp.get("todayMeals") or []
+        if today_rmeals:
+            lines.append(f"\nToday's Meals (Day {arp.get('currentDay', 1)}):")
+            for meal in today_rmeals:
+                title = f" – {meal['title']}" if meal.get("title") else ""
+                time  = f" ({meal['time']})" if meal.get("time") else ""
+                lines.append(f"\n  [{meal['mealType']}]{title}{time}")
+                for item in meal.get("items") or []:
+                    qty  = f" {item['quantity']}" if item.get("quantity") else ""
+                    unit = f" {item['unit']}" if item.get("unit") else ""
+                    note = f" — {item['notes']}" if item.get("notes") else ""
+                    inst = f" ({item['instruction']})" if item.get("instruction") else ""
+                    lines.append(f"    - {item['name']}{qty}{unit}{note}{inst}")
+        else:
+            lines.append("  (No meal data for today yet)")
+        lines.append("================================")
+
+    return "\n".join(lines)
+
+
+def build_available_plans_context(profile: Optional[dict]) -> str:
+    """For free users: list available plans they can explore."""
+    avail = (profile or {}).get("availablePlans") or {}
+    dp    = avail.get("dietPlans") or []
+    rp    = avail.get("rationPlans") or []
+    if not dp and not rp:
+        return ""
+
+    lines = ["\n=== PLANS AVAILABLE IN THE RAW DIET APP ==="]
+    if dp:
+        lines.append("\nDiet Plans (Recipe-based):")
+        for p in dp:
+            lines.append(f"  • {p.get('name', 'Unnamed')}")
+            if p.get("dietType"):   lines.append(f"    Diet: {p['dietType']}")
+            if p.get("duration"):   lines.append(f"    Duration: {p['duration']} days")
+            if p.get("calories"):   lines.append(f"    Calories: {p['calories']} kcal/day")
+            if p.get("description"): lines.append(f"    Info: {p['description']}")
+    if rp:
+        lines.append("\nRation Plans (Portion-based):")
+        for p in rp:
+            lines.append(f"  • {p.get('name', 'Unnamed')}")
+            if p.get("dietType"):   lines.append(f"    Diet: {p['dietType']}")
+            if p.get("duration"):   lines.append(f"    Duration: {p['duration']} days")
+            if p.get("description"): lines.append(f"    Info: {p['description']}")
+    lines.append("\nRefer to plans by their exact name. Never invent plan names.")
+    lines.append("===========================================")
     return "\n".join(lines)
 
 
@@ -178,190 +521,91 @@ def build_user_context(profile: Optional[dict]) -> str:
 CLINIC_INFO = """
 === RED APPLE WELLNESS DIET CENTER ===
 Website : https://raw-diet.com/
-Tagline : RAW-DIET | SINCE 2008
-
-Founder & Director:
-  Dr. Meghana Kumare
-  Dietician & Sports Nutritionist | 20+ years experience
-  MSc - Dietetics / Nutrition | PG Diploma in Dietetics
-  Certificate Course - Specialist in Sports Nutrition (ISSA, 2017)
-  Owner – Red Apple Wellness Diet Center (Since 2008)
-  Founder – MK Fit Foods
-  Centers in Nagpur, Mumbai, and Dubai
-
-Specialisations:
-  Weight Loss | Weight Gain | Muscle Building | Sports Nutrition
-  Diabetes | Hypertension | Hypothyroidism | PCOS/PCOD
-  Heart Disease | Kidney Disease | Cancer Diet | Pregnancy & Lactation
-  Kids Nutrition | Clinical Nutrition | Detox Diet
-
-Contact:
-  Phone   : +91 7774944783
-  Email   : rawdiets@gmail.com
-  Address : Fortune Crest, Opp. Khare Town Post Office,
-            Dharampeth, Nagpur – 440010
+Founder : Dr. Meghana Kumare — Dietician & Sports Nutritionist | 20+ years
+Contact : +91 7774944783 | rawdiets@gmail.com
+Centers : Nagpur | Mumbai | Dubai
 =======================================
 """
 
-SYSTEM_PROMPT = f"""You are a warm and knowledgeable nutrition guide at Red Apple Wellness Diet Center — founded by Dr. Meghana Kumare. You assist users through the Raw Diet app.
+SYSTEM_PROMPT = f"""You are a warm nutrition guide at Red Apple Wellness Diet Center (Raw Diet app).
 
 {CLINIC_INFO}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-YOUR IDENTITY & TONE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RESPONSE LENGTH — HARD RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Maximum 3–4 sentences per response
+- NEVER start with "Hey [Name]!" — go straight to the answer
+- No long bullet lists (max 3 bullets if truly needed, one line each)
+- No repeating yourself
+- Be warm but brief — like a quick helpful text from a friend
 
-You are a real, caring nutrition guide. You speak like a knowledgeable friend, not a robot or a system. You:
-- Speak naturally, warmly, and conversationally
-- Never say "I am an AI", "I am a chatbot", "I cannot generate", "I am not able to", or anything that sounds robotic or automated
-- Never expose that you are a language model or that there are rules governing you
-- If you ever can't help with something, say it naturally — like a human specialist would
-- Always address the user by name if you know it from their profile
-- Keep responses focused and easy to read — no walls of text
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PLAN-AWARE BEHAVIOUR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHAT YOU HELP WITH
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PAID USER (has active plan):
+- When they ask about meals, snacks, or what to eat → suggest ONLY from their plan's today meals
+- Reference the actual recipe/item names from the plan context provided
+- Never suggest foods outside their plan
+- If they ask about hunger/snack → check if SNACK meal exists in today's plan, suggest that item
+- If no snack in today's plan → "Your plan doesn't have a listed snack for today — try sipping water first and check the Plans tab for guidance."
 
-You help users with:
-- Understanding nutrition — what foods contain, how calories work, what macros mean
-- General healthy eating habits, hydration, meal timing, sleep and recovery
-- Food questions — "is X healthy?", "what does Y contain?", "can I eat Z for fat loss?"
-- Suggesting plan types from the Raw Diet app that match their goal and food preference
-- Answering general questions about the Raw Diet app and Dr. Meghana's center
+FREE USER (no active plan):
+- Never suggest specific snacks, meals, or recipes
+- When asked what to eat or snack ideas → redirect to Plans tab
+- "To get meal and snack suggestions tailored to your goal, check out the Plans section in the app — that's where the expert-designed options are."
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIET PLANS — THE MOST IMPORTANT RULE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIET PLANS — RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- NEVER create or write out a full meal plan or diet chart
+- For plan questions → reference available plan names from the context, direct to Plans tab
+- Free users: "Explore the Plans section in the app for plans designed by Dr. Meghana."
 
-The Raw Diet app has structured, expert-designed diet plans available for users to explore and follow.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUT OF SCOPE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"That's outside my area — nutrition and health is my zone! What can I help you with? 😊"
 
-RULE — NEVER CREATE OR EXPOSE A PLAN:
-You must NEVER create, generate, write out, or describe a full diet plan or meal schedule.
-Do NOT write things like:
-  ❌ "Here is your 7-day meal plan..."
-  ❌ "Day 1: Morning — oats, Lunch — dal rice, Dinner — grilled chicken..."
-  ❌ "Your daily calorie split should be..."
-These plans are available inside the app and are designed by Dr. Meghana personally.
-
-RULE — SUGGEST PLAN TYPES INSTEAD:
-When a user asks about diet plans, meal plans, or what to eat for their goal — suggest the type of plans they can explore in the Raw Diet app based on their goal and preferences. Be warm and helpful, not vague. Example style:
-
-"Based on your goal of fat loss and vegetarian preference, the Raw Diet app has structured plans designed around clean, whole foods — typically low in refined carbs, high in protein and fibre. You can explore these in the Plans section of the app and find one that fits your timeline and budget. Would you like me to help you understand what to look for in a good fat loss plan?"
-
-RULE — EXPLAIN NUTRITION FREELY:
-You CAN and SHOULD explain:
-- What types of foods support a goal (e.g. high protein for muscle gain)
-- General principles behind a plan type (e.g. how a low-carb approach works)
-- What to look for when choosing a plan
-- Healthy habits around eating, hydration, sleep, and activity
-This is helpful, educational guidance — NOT a plan.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OUT OF SCOPE — HOW TO HANDLE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-If a user asks about something completely unrelated to diet, nutrition, fitness, health, or the Raw Diet app — respond naturally and gracefully. Do NOT say "I cannot answer this" or sound robotic. Instead use a response like:
-
-"That's a bit outside my area — I'm really only useful when it comes to nutrition, food, and health goals! Is there something diet or wellness related I can help you with? 😊"
-
-Other examples of graceful out-of-scope responses:
-- "Ha, that's more of a question for someone else — nutrition is my zone! What can I help you with on the health front?"
-- "I'm not the best person to ask about that, but when it comes to food and fitness, I'm all yours!"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MEDICAL CONDITIONS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Redirect briefly: "For [condition], Dr. Meghana can personalise a safe plan for you — reach her at +91 7774944783 or rawdiets@gmail.com"
+EMERGENCY: "⚠️ Please seek immediate medical attention right away."
+Never suggest medications.
 
-If the user mentions a medical condition (diabetes, thyroid, PCOS, heart disease, kidney disease, cancer, hypertension, cholesterol, post-surgery, chemotherapy, etc.):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHATSAPP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Never mention WhatsApp in your text. The app has a separate button for that.
 
-Do NOT provide clinical dietary plans. Instead, respond warmly and redirect to Dr. Meghana:
-
-"When it comes to [condition], diet plays a really important role — but it also needs to be carefully designed around your specific health history, medications, and reports. That's something Dr. Meghana specialises in deeply.
-
-I'd recommend connecting with her directly for a plan that's medically safe and personalised for you:
-
-👩‍⚕️ Dr. Meghana Kumare
-📞 +91 7774944783
-📧 rawdiets@gmail.com
-🌐 https://raw-diet.com/
-
-👇 Tap the WhatsApp button below to share your details and she'll take it from there."
-
-EMERGENCY: If user mentions chest pain, breathlessness, or loss of consciousness — say: "⚠️ Please seek immediate medical attention or call emergency services right away. This needs urgent care."
-
-MEDICATION RULE: Never suggest, name, or discuss any medication or dosage.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHATSAPP BUTTON
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-When a user asks about diet plans, consultations, or mentions a medical condition — end your reply with exactly this line so the app can show a button:
-"👇 Tap the button below to connect with Dr. Meghana on WhatsApp!"
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FINAL REMINDERS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- NEVER contradict the user's known allergies or dietary restrictions
-- NEVER mention competitor diet centers or other nutritionists
-- Format links as plain URLs — not markdown [text](url) format
-- Keep responses concise, warm, and easy to read
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Never contradict the user's allergies or dietary restrictions
+- Never mention competitor diet centers
+- Format links as plain URLs — not markdown
+- SHORT. WARM. PLAN-AWARE. Every time.
 """
 
 
-
-
-def get_user_plan_status(profile):
-    """Returns 'paid' if the user has an active plan, else 'free'."""
-    if not profile:
-        return 'free'
-    for key in ('subscription', 'plan', 'currentPlan'):
-        sub = profile.get(key) or {}
-        if isinstance(sub, dict):
-            status = str(sub.get('status', '') or sub.get('isActive', '')).lower()
-            if status in ('active', 'true', '1'):
-                return 'paid'
-    if profile.get('isSubscribed') or profile.get('isPaid') or profile.get('hasActivePlan'):
-        return 'paid'
-    if str(profile.get('planStatus', '')).lower() == 'active':
-        return 'paid'
-    return 'free'
-
+# ── Prompt builder ─────────────────────────────────────────────────────────────
 
 FREE_USER_ADDENDUM = """
-
-USER STATUS: NO ACTIVE PLAN
-------------------------------------------------------
-This user does NOT have an active paid diet plan yet.
-
-YOUR ROLE for this user:
-- Help them identify which plan category suits their goal and health profile
-- Explain the benefits of a paid plan (expert-designed, personalised, clinic-backed by Dr. Meghana)
-- Always guide them to the Plans section of the Raw Diet app to explore and purchase
-- Do NOT provide specific diet instructions, meal schedules, or recipes
-- Answer nutrition questions at a high level, then pivot to plan exploration
-
-Pivot example:
-"To build a proper structure around that goal, the Raw Diet app has expert plans from Dr. Meghana
-designed exactly for this. Explore the Plans tab in the app and pick one that fits your goal
-and budget. Want help figuring out which type suits you best?"
+USER STATUS: FREE (no active plan)
+- Do NOT suggest specific foods, snacks, or recipes
+- Guide them to the Plans tab for anything food-specific
+- Answer general nutrition questions briefly
 """
 
 PAID_USER_ADDENDUM = """
-
-USER STATUS: ACTIVE PAID PLAN
-------------------------------------------------------
-This user has an active paid diet plan.
-
-YOUR ROLE for this user:
-- Answer general nutrition and health questions warmly and helpfully
-- Help them stay motivated, understand healthy habits, hydration, and meal timing
-- Explain WHAT food types support their goal and WHY in general terms only
-- Do NOT generate, reproduce, or detail any meal plan, recipe, or diet chart
-- Their full plan and recipes are inside the app - direct them there for specifics
-- If they ask for their meal plan or recipes say:
-  "Your full plan with meal details and recipes is in the Plans tab of the app - everything is right there for you!"
+USER STATUS: PAID (has active plan)
+- For food/meal/snack questions: reference ONLY today's meals from their plan above
+- Use the actual recipe/item names provided in the plan context
+- Do not suggest foods outside their plan
 """
+
 
 def build_prompt(
     user_message: str,
@@ -369,39 +613,262 @@ def build_prompt(
     chat_history: list,
     goal_hint: Optional[str] = None,
 ) -> str:
-    """Build the full prompt sent to Gemini, tailored to user plan status."""
-    user_ctx = build_user_context(profile)
-    goal_line = f"\nUser's stated goal: {goal_hint}" if goal_hint else ""
+    user_ctx         = build_user_context(profile)
+    active_plan_ctx  = build_active_plan_context(profile)
+    avail_plans_ctx  = build_available_plans_context(profile)
+    goal_line        = f"\nUser's stated goal: {goal_hint}" if goal_hint else ""
 
     history_block = ""
     if chat_history:
         turns = []
-        for msg in chat_history[-10:]:
+        for msg in chat_history[-6:]:
             turns.append(f"User: {msg.get('question', '')}")
             turns.append(f"Trainer: {msg.get('answer', '')}")
         history_block = "\n=== RECENT CONVERSATION ===\n" + "\n".join(turns) + "\n===========================\n"
 
-    plan_status = get_user_plan_status(profile)
+    plan_status   = get_user_plan_status(profile)
     plan_addendum = PAID_USER_ADDENDUM if plan_status == 'paid' else FREE_USER_ADDENDUM
 
     return f"""{SYSTEM_PROMPT}{plan_addendum}
 
-{user_ctx}{goal_line}
+{user_ctx}{active_plan_ctx}{avail_plans_ctx}{goal_line}
 {history_block}
+REMINDER: 3–4 sentences max. Do NOT open with "Hey [Name]!". Be direct and warm.
+
 User message: {user_message}
 
 Trainer response:"""
 
 
-# ── Detect query category ──────────────────────────────────────────────────────
+# ── Response length guard ──────────────────────────────────────────────────────
+
+def _truncate_gemini_answer(text: str, max_sentences: int = 5) -> str:
+    import re
+    if not text:
+        return text
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    if len(sentences) <= max_sentences:
+        return text
+    trimmed = " ".join(sentences[:max_sentences])
+    logger.info(f"✂️ Trimmed response from {len(sentences)} to {max_sentences} sentences")
+    return trimmed
+
+
+# ── Intent helpers ─────────────────────────────────────────────────────────────
+
+CONSULT_KEYWORDS = [
+    "consult", "consultation", "book appointment", "speak to doctor",
+    "talk to meghana", "contact meghana", "speak to dietician",
+    "book a session", "want to consult", "connect with doctor",
+    "reach meghana", "contact the clinic", "i want to meet",
+    "can i book", "how to consult", "take appointment", "get appointment",
+]
+
+
+def is_consult_intent(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(kw in msg for kw in CONSULT_KEYWORDS)
+
+
+def is_greeting(text: str) -> bool:
+    greetings = {"hi", "hello", "hey", "good morning", "good afternoon",
+                 "good evening", "hiya", "howdy", "namaste", "helo", "hii", "yo"}
+    t = text.lower().strip().rstrip("!.,")
+    return t in greetings or any(t.startswith(g + " ") for g in greetings)
+
+
+HUNGER_KEYWORDS = [
+    "i'm hungry", "im hungry", "i am hungry", "feeling hungry", "i feel hungry",
+    "so hungry", "very hungry", "starving", "need a snack", "want a snack",
+    "can i eat", "what can i eat", "what should i eat", "what to eat now",
+    "i need to eat", "craving something", "need something to eat",
+    "can i have a snack", "snack suggestion", "suggest a snack",
+    "hungry right now", "need food",
+]
+
+
+def is_hunger_intent(message: str) -> bool:
+    msg = message.lower().strip()
+    return any(kw in msg for kw in HUNGER_KEYWORDS)
+
+
+# Meal type display order for hunger response
+_MEAL_ORDER = [
+    "MORNING", "BREAKFAST", "MID_AFTERNOON", "LUNCH", "SNACK", "DINNER", "BED_TIME"
+]
+
+_MEAL_LABELS = {
+    "MORNING":       "Morning",
+    "BREAKFAST":     "Breakfast",
+    "MID_AFTERNOON": "Mid-Afternoon",
+    "LUNCH":         "Lunch",
+    "SNACK":         "Snack",
+    "DINNER":        "Dinner",
+    "BED_TIME":      "Bed-Time",
+}
+
+
+def _build_plan_meals_text(profile: dict) -> str:
+    """Flatten today's meals from whichever active plan into readable text for the prompt."""
+    lines = []
+
+    adp = profile.get("activeDietPlan")
+    if adp:
+        lines.append(f"Plan: {adp.get('name', 'Diet Plan')} (Day {adp.get('currentDay', 1)})")
+        for meal in adp.get("todayMeals") or []:
+            mtype = _MEAL_LABELS.get(meal.get("mealType", "").upper(), meal.get("mealType", ""))
+            recipes = meal.get("recipes") or []
+            if recipes:
+                recipe_parts = []
+                for r in recipes:
+                    cal  = f" ({r['calories']} kcal)" if r.get("calories") else ""
+                    prot = f", {r['proteinG']}g protein" if r.get("proteinG") else ""
+                    recipe_parts.append(f"{r['name']}{cal}{prot}")
+                lines.append(f"  {mtype}: {', '.join(recipe_parts)}")
+        return "\n".join(lines)
+
+    arp = profile.get("activeRationPlan")
+    if arp:
+        lines.append(f"Plan: {arp.get('name', 'Ration Plan')} (Day {arp.get('currentDay', 1)})")
+        if arp.get("specialComments"):
+            lines.append(f"Note: {arp['specialComments']}")
+        for meal in arp.get("todayMeals") or []:
+            mtype = _MEAL_LABELS.get(meal.get("mealType", "").upper(), meal.get("mealType", ""))
+            items = meal.get("items") or []
+            if items:
+                item_parts = []
+                for i in items:
+                    qty  = f" {i['quantity']}" if i.get("quantity") else ""
+                    unit = f" {i['unit']}"     if i.get("unit")     else ""
+                    item_parts.append(f"{i['name']}{qty}{unit}".strip())
+                time_note = f" ({meal['time']})" if meal.get("time") else ""
+                lines.append(f"  {mtype}{time_note}: {', '.join(item_parts)}")
+        return "\n".join(lines)
+
+    return ""
+
+
+def _build_available_plans_text(profile: dict) -> str:
+    """Short summary of available plans for free user hunger prompt."""
+    avail = profile.get("availablePlans") or {}
+    dp    = avail.get("dietPlans") or []
+    rp    = avail.get("rationPlans") or []
+    lines = []
+    for p in (dp + rp)[:5]:  # max 5 plans to keep prompt lean
+        name = p.get("name", "Plan")
+        dur  = f"{p['duration']} days" if p.get("duration") else ""
+        diet = p.get("dietType", "")
+        desc = p.get("description", "")
+        parts = [x for x in [diet, dur, desc] if x]
+        lines.append(f"- {name}: {' | '.join(parts)}" if parts else f"- {name}")
+    return "\n".join(lines)
+
+
+def _hunger_response_paid(profile: dict) -> str:
+    """
+    For paid users: build a focused Gemini prompt using their actual plan meals.
+    Gemini suggests what to eat from within the plan — not random food.
+    """
+    meals_text = _build_plan_meals_text(profile)
+
+    if not meals_text:
+        adp = profile.get("activeDietPlan") or profile.get("activeRationPlan") or {}
+        return (
+            f"You're on {adp.get('name', 'your plan')} — open the Plans tab "
+            f"to see today's full meal schedule. Try some water while you wait! 💧"
+        )
+
+    identity   = (profile or {}).get("identity") or {}
+    name       = identity.get("fullName") or profile.get("name") or ""
+    first_name = name.split()[0] if name else ""
+
+    prompt = f"""You are a short, warm nutrition guide. The user says they're hungry.
+
+Their active plan's meals for today are:
+{meals_text}
+
+Their name is: {first_name or 'the user'}
+
+Rules:
+- Suggest something they can eat RIGHT NOW based on what's in their plan above
+- Do NOT invent food outside the plan
+- If the plan has a light meal or something suitable as a snack (fruits, nuts, light item), suggest that
+- If all meals are heavy, suggest the lightest option or a portion of it, and mention drinking water first
+- Reply in 2–3 sentences max. Warm and direct. Do NOT start with "Hey [name]!"
+- No bullet lists
+
+Trainer response:"""
+
+    try:
+        resp = gemini_client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        return _truncate_gemini_answer(resp.text.strip(), max_sentences=3)
+    except Exception as e:
+        logger.error(f"❌ _hunger_response_paid Gemini error: {e}")
+        return (
+            "Check your plan's meals in the Plans tab — pick the lightest item available "
+            "and have some water alongside it! 💧"
+        )
+
+
+def _hunger_response_free(profile: dict) -> str:
+    """
+    For free users: use Gemini to give a short, enticing overview of available plans
+    and gently encourage them to get one — with actual plan names from DB.
+    """
+    plans_text = _build_available_plans_text(profile)
+
+    identity   = (profile or {}).get("identity") or {}
+    name       = identity.get("fullName") or profile.get("name") or ""
+    first_name = name.split()[0] if name else ""
+
+    food = (profile or {}).get("foodactivity") or {}
+    prefs = food.get("foodPreferences") or []
+    diet_hint = f"Their diet preference: {', '.join(prefs)}." if prefs else ""
+
+    plans_section = f"Available plans in the app:\n{plans_text}" if plans_text else \
+                    "The app has expert-designed diet and ration plans by Dr. Meghana Kumare."
+
+    prompt = f"""You are a short, warm nutrition guide. The user says they're hungry but has no active plan.
+
+{plans_section}
+
+User name: {first_name or 'the user'}
+{diet_hint}
+
+Rules:
+- Briefly mention 1–2 relevant plan names from the list above (if available) that match their diet preference
+- Give ONE short benefit of being on a plan (e.g. knowing exactly what to eat)
+- End with a friendly nudge to check the Plans tab
+- Do NOT suggest specific foods or snacks since they have no plan
+- 2–3 sentences max. Warm and direct. Do NOT start with "Hey [name]!"
+- No bullet lists
+
+Trainer response:"""
+
+    try:
+        resp = gemini_client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        return _truncate_gemini_answer(resp.text.strip(), max_sentences=3)
+    except Exception as e:
+        logger.error(f"❌ _hunger_response_free Gemini error: {e}")
+        return (
+            "Getting on a plan means you'll always know exactly what to eat — no guessing! "
+            "Check the Plans tab to explore Dr. Meghana's options. 😊"
+        )
+
+
+def _hunger_response(profile: Optional[dict]) -> str:
+    """Route hunger intent to paid or free handler."""
+    if get_user_plan_status(profile) == 'paid':
+        return _hunger_response_paid(profile)
+    return _hunger_response_free(profile or {})
+
 
 def detect_goal_from_history(history: list) -> Optional[str]:
-    """Try to detect the user's stated fitness goal from recent messages."""
     goal_keywords = {
-        "weight loss": ["lose weight", "weight loss", "slim down", "fat loss", "cut"],
-        "weight gain": ["gain weight", "bulk", "weight gain", "gain mass"],
-        "muscle building": ["build muscle", "muscle gain", "strength", "muscle building", "bulk up"],
-        "maintenance": ["maintain", "stay fit", "healthy lifestyle", "eat healthy"],
+        "weight loss":     ["lose weight", "weight loss", "slim down", "fat loss", "cut"],
+        "weight gain":     ["gain weight", "bulk", "weight gain", "gain mass"],
+        "muscle building": ["build muscle", "muscle gain", "strength", "bulk up"],
+        "maintenance":     ["maintain", "stay fit", "healthy lifestyle", "eat healthy"],
     }
     for msg in reversed(history[-20:] if history else []):
         text = (msg.get("question", "") + " " + msg.get("answer", "")).lower()
@@ -411,42 +878,83 @@ def detect_goal_from_history(history: list) -> Optional[str]:
     return None
 
 
-def is_greeting(text: str) -> bool:
-    greetings = {"hi", "hello", "hey", "good morning", "good afternoon", "good evening",
-                 "hiya", "howdy", "namaste", "helo", "hii", "yo"}
-    t = text.lower().strip().rstrip("!.,")
-    return t in greetings or any(t.startswith(g + " ") for g in greetings)
+# ── Short canned responses ────────────────────────────────────────────────────
+
+def _greeting_response(profile: Optional[dict]) -> str:
+    identity   = (profile or {}).get("identity") or {}
+    name       = identity.get("fullName") or (profile or {}).get("name") or ""
+    first_name = name.split()[0] if name else ""
+    addr       = f", {first_name}" if first_name else ""
+    plan_status = get_user_plan_status(profile)
+    if plan_status == 'paid':
+        active = get_active_plan_summary(profile)
+        pname  = active.get("name", "your plan") if active else "your plan"
+        return (
+            f"Hey{addr}! 👋 Good to see you — you're on {pname} right now. "
+            f"What can I help you with today? 😊"
+        )
+    return (
+        f"Hey{addr}! 👋 I'm your nutrition guide at Red Apple Wellness Diet Center. "
+        f"Whether it's weight loss, muscle gain, or eating better — I'm here to help. "
+        f"What's on your mind? 😊"
+    )
+
+
+def _consult_response(profile: Optional[dict]) -> str:
+    identity = (profile or {}).get("identity") or {}
+    name     = identity.get("fullName") or (profile or {}).get("name") or ""
+    first    = name.split()[0] if name else ""
+    addr     = f", {first}" if first else ""
+    return (
+        f"Sure{addr}! Dr. Meghana would be happy to help with a personal consultation. "
+        f"Reach her at +91 7774944783 or rawdiets@gmail.com — use the WhatsApp button in the app to connect directly. 😊"
+    )
 
 
 # ── Main answer functions ──────────────────────────────────────────────────────
+
+def _load_profile(firebase_uid, firebase_token):
+    """Load profile from DB (preferred) or API fallback."""
+    profile = None
+    if firebase_uid:
+        try:
+            from database import SessionLocal
+            _db = SessionLocal()
+            try:
+                profile = fetch_user_profile_db(firebase_uid, _db)
+            finally:
+                _db.close()
+        except Exception as e:
+            logger.warning(f"⚠️ DB profile load failed: {e}")
+    if not profile:
+        profile = fetch_user_profile(firebase_token)
+    return profile
+
 
 def get_answer(
     question: str,
     session_id: Optional[str] = None,
     db_session=None,
     firebase_token: Optional[str] = None,
+    firebase_uid: Optional[str] = None,
 ) -> str:
-    """Blocking answer — fetches user profile, builds prompt, calls Gemini."""
     global gemini_client
 
     if gemini_client is None:
         return "Having a little trouble connecting right now — give it a moment and try again! 🙏"
 
+    profile = _load_profile(firebase_uid, firebase_token)
+
     if is_greeting(question):
-        profile = fetch_user_profile(firebase_token)
-        identity = (profile or {}).get("identity") or {}
-        name = identity.get("fullName") or (profile or {}).get("name") or ""
-        first_name = name.split()[0] if name else ""
-        greeting_name = f", {first_name}" if first_name else ""
-        return (
-            f"Hey{greeting_name}! 👋 Welcome to the Raw Diet app — your nutrition guide here at Red Apple Wellness Diet Center. 🍎\n\n"
-            f"I'm here to help you understand nutrition, explore the right kind of plan for your goals, and guide you toward healthier habits.\n\n"
-            f"Whether you're looking to lose weight, gain muscle, eat cleaner, or just have a question about food — I've got you. What's on your mind? 😊"
-        )
+        return _greeting_response(profile)
+
+    if is_consult_intent(question):
+        return _consult_response(profile)
+
+    if is_hunger_intent(question):
+        return _hunger_response(profile)
 
     try:
-        profile = fetch_user_profile(firebase_token)
-
         history = []
         if db_session and session_id:
             try:
@@ -454,23 +962,21 @@ def get_answer(
             except Exception as e:
                 logger.warning(f"Could not load history: {e}")
 
-        goal = detect_goal_from_history(history)
+        goal   = detect_goal_from_history(history)
         prompt = build_prompt(question, profile, history, goal)
 
         logger.info("🤖 Calling Gemini for answer...")
-        resp = gemini_client.models.generate_content(
-            model="gemini-3.5-flash",
+        resp   = gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
             contents=prompt
         )
-        answer = resp.text.strip()
+        answer = _truncate_gemini_answer(resp.text.strip())
         logger.info(f"✅ Answer ready ({len(answer)} chars)")
         return answer
 
     except Exception as e:
         logger.error(f"❌ get_answer error: {e}\n{traceback.format_exc()}")
-        return (
-            "Something came up on my end — let's try that again in a second! 💪"
-        )
+        return "Something came up on my end — let's try that again in a second! 💪"
 
 
 def get_answer_stream(
@@ -478,14 +984,8 @@ def get_answer_stream(
     session_id: Optional[str] = None,
     db_session=None,
     firebase_token: Optional[str] = None,
+    firebase_uid: Optional[str] = None,
 ) -> Generator[str, None, None]:
-    """
-    Streaming answer generator.
-    Yields SSE lines:
-        data: {"type": "chunk", "text": "..."}   ← raw Gemini token
-        data: {"type": "done",  "text": "..."}   ← full final answer
-        data: {"type": "error", "text": "..."}   ← on failure
-    """
     import json as _j
 
     def sse(payload: dict) -> str:
@@ -494,27 +994,30 @@ def get_answer_stream(
     if gemini_client is None:
         msg = "Having a little trouble connecting right now — give it a moment and try again! 🙏"
         yield sse({"type": "chunk", "text": msg})
-        yield sse({"type": "done",  "text": msg})
+        yield sse({"type": "done",  "text": ""})
         return
 
+    profile = _load_profile(firebase_uid, firebase_token)
+
     if is_greeting(question):
-        profile = fetch_user_profile(firebase_token)
-        identity = (profile or {}).get("identity") or {}
-        name = identity.get("fullName") or (profile or {}).get("name") or ""
-        first_name = name.split()[0] if name else ""
-        greeting_name = f", {first_name}" if first_name else ""
-        msg = (
-            f"Hey{greeting_name}! 👋 Welcome to the Raw Diet app — your nutrition guide here at Red Apple Wellness Diet Center. 🍎\n\n"
-            f"I'm here to help you understand nutrition, explore the right kind of plan for your goals, and guide you toward healthier habits.\n\n"
-            f"Whether you're looking to lose weight, gain muscle, eat cleaner, or just have a question about food — I've got you. What's on your mind? 😊"
-        )
+        msg = _greeting_response(profile)
         yield sse({"type": "chunk", "text": msg})
-        yield sse({"type": "done",  "text": msg})
+        yield sse({"type": "done",  "text": ""})
+        return
+
+    if is_consult_intent(question):
+        msg = _consult_response(profile)
+        yield sse({"type": "chunk", "text": msg})
+        yield sse({"type": "done",  "text": ""})
+        return
+
+    if is_hunger_intent(question):
+        msg = _hunger_response(profile)
+        yield sse({"type": "chunk", "text": msg})
+        yield sse({"type": "done",  "text": ""})
         return
 
     try:
-        profile = fetch_user_profile(firebase_token)
-
         history = []
         if db_session and session_id:
             try:
@@ -522,29 +1025,27 @@ def get_answer_stream(
             except Exception as e:
                 logger.warning(f"Could not load history: {e}")
 
-        goal = detect_goal_from_history(history)
-        prompt = build_prompt(question, profile, history, goal)
-
-        logger.info("🤖 Streaming from Gemini...")
+        goal        = detect_goal_from_history(history)
+        prompt      = build_prompt(question, profile, history, goal)
         accumulated = ""
 
+        logger.info("🤖 Streaming from Gemini...")
         stream = gemini_client.models.generate_content_stream(
-            model="gemini-3.5-flash",
+            model=GEMINI_MODEL,
             contents=prompt
         )
-
         for chunk in stream:
             if chunk.text:
                 accumulated += chunk.text
                 yield sse({"type": "chunk", "text": chunk.text})
 
-        logger.info(f"✅ Stream complete ({len(accumulated)} chars)")
-        yield sse({"type": "done", "text": accumulated.strip()})
+        final = _truncate_gemini_answer(accumulated.strip())
+        logger.info(f"✅ Stream complete ({len(final)} chars)")
+        yield sse({"type": "done", "text": ""})
 
     except Exception as e:
         logger.error(f"❌ get_answer_stream error: {e}\n{traceback.format_exc()}")
-        err_msg = "Something came up on my end — let's try that again in a second! 💪"
-        yield sse({"type": "error", "text": err_msg})
+        yield sse({"type": "error", "text": "Something came up on my end — let's try that again in a second! 💪"})
 
 
 def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
@@ -558,23 +1059,18 @@ def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
             .all()
         )
         rows = list(reversed(rows))
-        
-        # Convert flat list of messages into question/answer pairs for the prompt
         history_pairs = []
         i = 0
         while i < len(rows) - 1:
-            if rows[i].role == MessageRole.USER and rows[i+1].role == MessageRole.ASSISTANT:
+            if rows[i].role == MessageRole.USER and rows[i + 1].role == MessageRole.ASSISTANT:
                 history_pairs.append({
                     "question": rows[i].content,
-                    "answer": rows[i+1].content
+                    "answer":   rows[i + 1].content,
                 })
                 i += 2
             else:
                 i += 1
-                
         return history_pairs[-limit:]
     except Exception as e:
         logger.error(f"❌ get_recent_messages error: {e}")
         return []
-
-
