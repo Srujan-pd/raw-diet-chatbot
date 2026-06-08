@@ -360,35 +360,36 @@ async def chat_stream(
                         yield chunk
 
                     elif evt.get("type") == "done":
-                        final = evt.get("text", final)
-                        # ─── FIX: Properly save to database ───
+                        # full_text = complete response for DB saving
+                        # text is empty string intentionally so frontend does not render it twice
+                        full_text = evt.get("full_text") or final
+                        # ── Save to DB ─────────────────────────────────────────
                         try:
-                            # Attach the session to the current db_session
                             attached_session = db_session.merge(chat_session)
-                            # Create new messages
-                            user_msg = ChatMessage(
-                                sessionId=attached_session.id,
-                                role=MessageRole.USER,
-                                content=msg
-                            )
-                            assistant_msg = ChatMessage(
-                                sessionId=attached_session.id,
-                                role=MessageRole.ASSISTANT,
-                                content=final
-                            )
-                            db_session.add_all([user_msg, assistant_msg])
+                            db_session.add_all([
+                                ChatMessage(
+                                    sessionId=attached_session.id,
+                                    role=MessageRole.USER,
+                                    content=msg,
+                                ),
+                                ChatMessage(
+                                    sessionId=attached_session.id,
+                                    role=MessageRole.ASSISTANT,
+                                    content=full_text,
+                                ),
+                            ])
                             db_session.commit()
-                            logger.info(f"✅ Saved stream messages for session {sid_str}")
+                            logger.info(f"✅ Saved stream exchange for session {sid_str} ({len(full_text)} chars)")
                         except Exception as save_err:
-                            logger.error(f"❌ Failed to save exchange: {save_err}")
+                            logger.error(f"❌ Failed to save stream exchange: {save_err}")
                             try:
                                 db_session.rollback()
-                            except:
+                            except Exception:
                                 pass
-                        # ──────────────────────────────────────
+                        # ── Send done to frontend (empty text prevents duplicate) ──
                         done_payload = {
                             "type":       "done",
-                            "text":       final,
+                            "text":       "",
                             "session_id": sid_str,
                         }
                         if wa_url:
