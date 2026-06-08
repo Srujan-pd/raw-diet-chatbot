@@ -538,7 +538,7 @@ def build_available_plans_context(profile: Optional[dict]) -> str:
 CLINIC_INFO = """
 === RED APPLE WELLNESS DIET CENTER ===
 Website : https://raw-diet.com/
-Founder : Dr. Meghana Kumare — Dietician & Sports Nutritionist | 20+ years
+Founder : Dr. Meghana Kumare Dietician & Sports Nutritionist | 20+ years
 Contact : +91 7774944783 | rawdiets@gmail.com
 Centers : Nagpur | Mumbai | Dubai
 =======================================
@@ -602,7 +602,7 @@ FINAL REMINDERS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Never contradict the user's allergies or dietary restrictions
 - Never mention competitor diet centers
-- Format links as plain URLs — not markdown
+- Format links as plain URLs not markdown
 - SHORT. WARM. PLAN-AWARE. Every time.
 """
 
@@ -907,7 +907,7 @@ def _greeting_response(profile: Optional[dict]) -> str:
         active = get_active_plan_summary(profile)
         pname  = active.get("name", "your plan") if active else "your plan"
         return (
-            f"Hey{addr}! 👋 Good to see you — you're on {pname} right now. "
+            f"Hey{addr}! 👋 Good to see you you're on {pname} right now. "
             f"What can I help you with today? 😊"
         )
     return (
@@ -998,7 +998,11 @@ NAV_INTENTS = [
             "Here's how to find and activate a plan:\n"
             "1️⃣ Tap the *Diet* tab at the bottom of the screen\n"
             "2️⃣ Browse all available plans and filter by your goal or diet type\n"
+<<<<<<< HEAD
             "3️⃣ Tap any plan to see full details duration, meals, and what's included\n"
+=======
+            "3️⃣ Tap any plan to see full details — duration, meals, and what's included\n"
+>>>>>>> 1f0248c7e9920867f7b0c8f036cc3562b1057848
             "4️⃣ Purchase the plan that fits you to activate it instantly ✅\n\n"
             "Once active, your plan meals will appear in the Home tab every day. "
             "Not sure which plan suits you? Just ask me and I'll help you choose! 😊"
@@ -1019,7 +1023,11 @@ NAV_INTENTS = [
             "2️⃣ Browse hundreds of recipes filter by meal type, diet preference, or ingredients\n"
             "3️⃣ Tap any recipe to see full ingredients, step-by-step instructions, and nutrition info\n\n"
             "You can also swap recipes within your active plan if you want variety. "
+<<<<<<< HEAD
             "Found something you like? Your plan's meals are always a good starting point! ��"
+=======
+            "Found something you like? Your plan's meals are always a good starting point! 😋"
+>>>>>>> 1f0248c7e9920867f7b0c8f036cc3562b1057848
         ),
     },
     {
@@ -1093,7 +1101,7 @@ def get_answer(
     global gemini_client
 
     if gemini_client is None:
-        return "Having a little trouble connecting right now — give it a moment and try again! 🙏"
+        return "Having a little trouble connecting right now give it a moment and try again! 🙏"
 
     profile = _load_profile(firebase_uid, firebase_token)
 
@@ -1132,7 +1140,7 @@ def get_answer(
 
     except Exception as e:
         logger.error(f"❌ get_answer error: {e}\n{traceback.format_exc()}")
-        return "Something came up on my end — let's try that again in a second! 💪"
+        return "Something came up on my end let's try that again in a second! 💪"
 
 
 def get_answer_stream(
@@ -1148,7 +1156,7 @@ def get_answer_stream(
         return f"data: {_j.dumps(payload)}\n\n"
 
     if gemini_client is None:
-        msg = "Having a little trouble connecting right now — give it a moment and try again! 🙏"
+        msg = "Having a little trouble connecting right now give it a moment and try again! 🙏"
         yield sse({"type": "chunk", "text": msg})
         yield sse({"type": "done",  "text": ""})
         return
@@ -1209,7 +1217,7 @@ def get_answer_stream(
 
     except Exception as e:
         logger.error(f"❌ get_answer_stream error: {e}\n{traceback.format_exc()}")
-        yield sse({"type": "error", "text": "Something came up on my end — let's try that again in a second! 💪"})
+        yield sse({"type": "error", "text": "Something came up on my end let's try that again in a second! 💪"})
 
 
 def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
