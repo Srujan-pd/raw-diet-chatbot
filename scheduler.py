@@ -132,45 +132,138 @@ def get_water_target(water_intake_enum: Optional[str]) -> str:
     return mapping.get(water_intake_enum or "", "at least 2.5L")
 
 
-# ── Motivation line based on goal ─────────────────────────────────────────────
+# ── 100 Motivational quotes (one per day, cycles after 100) ─────────────────
+
+MOTIVATIONS = [
+    # Weight loss
+    "Every clean meal is a vote for the person you're becoming. Keep voting! 🔥",
+    "Progress is progress — even 1% better today matters. You've got this! 💪",
+    "Your body is changing even when you can't see it yet. Trust the process! 🌱",
+    "Small choices compound. Every good meal today = a better you tomorrow! ⚡",
+    "You didn't come this far to only come this far. Keep pushing! 🏆",
+    "The scale doesn't measure your strength, discipline, or courage. You have all three! 💫",
+    "Consistency is the secret ingredient no one talks about. You're nailing it! 🎯",
+    "Eating right today is an act of love for your future self. Keep going! 💚",
+    "Results happen in the background while you stay consistent. Stay the course! 🌿",
+    "The hardest part is showing up — and you already did that! 🙌",
+    # Muscle / strength
+    "Strength is built one meal and one rep at a time. Today counts! 💥",
+    "Fuel your body like the machine it is. Protein, hydration, rest — nail it! 🥊",
+    "Champions are built on the days they don't feel like it. Show up anyway! 🏆",
+    "Your nutrition today is your performance tomorrow. Choose wisely! ⚡",
+    "Every gram of protein is a brick in the wall of your strength. Build it! 🧱",
+    "Muscle isn't built in the gym alone — it's built at the table too. Eat strong! 🍽️",
+    "Recovery starts with what you eat. Make today's meals count! 🌟",
+    "Strong people are made in the kitchen first. You're building something great! 💪",
+    "Discipline is choosing what you want most over what you want right now. Choose! 🎯",
+    "Your body responds to every good choice you make. Give it the best today! ⚡",
+    # Weight gain
+    "Growth requires fuel — eat with intention today! 🏋️",
+    "Every meal is an opportunity to build the body you're working toward! 🧱",
+    "Rest, eat, grow — that's the formula. Trust it and stay consistent! 🌟",
+    "Your gains start in the kitchen. Show up at the table today! 🍽️",
+    "Quality calories are the foundation of everything. Fuel right today! 💪",
+    # General health & wellness
+    "A healthy day starts with a healthy mindset. You've already won half the battle! ☀️",
+    "Nourish your body — it's the only home you'll ever truly live in! 🌿",
+    "One good day at a time. That's all it takes. Today is yours! 🌱",
+    "Eat well, move well, feel well. It's that simple — and you're doing it! 💚",
+    "Your health is your greatest wealth. Invest in it generously today! 💛",
+    "Every sunrise is a fresh start. Make this one count! 🌅",
+    "You are what you consistently do. Today, be excellent! ⭐",
+    "Real results come to those who show up even when it's hard. That's you! 🙌",
+    "Your future self is watching every decision you make today. Make them proud! 🌟",
+    "Healthy living isn't a phase — it's the life you're choosing every single day! 🔥",
+    "When you feel like giving up, remember why you started. Hold on! 💪",
+    "The food you eat today is medicine or poison. You choose — and you always choose well! 🌿",
+    "Hydration, nutrition, sleep — the holy trinity of transformation. Honour all three! 💧",
+    "Your commitment to your health inspires everyone around you — even if you don't know it! ✨",
+    "Discipline is the bridge between goals and achievement. You're walking it! 🏃",
+    "Some days are hard. Hard days are the ones that build the most character! 💫",
+    "You are stronger than your cravings — and you prove it every day! 🎯",
+    "The version of you at the end of this plan is going to thank you. Keep going! 🏆",
+    "Wellness is not a destination — it's how you travel. Travel well today! 🛤️",
+    "A little progress each day adds up to big results. Today's progress matters! 📈",
+    "Comparison is the thief of progress. Run your own race — and run it well! 🏃",
+    "You don't need motivation every day — you need habits. Your habits are forming! 🌱",
+    "Food is information for your body. Send it the best signals today! 📡",
+    "Rest is not giving up — it's fuelling the next push forward. Rest and rise! 🌙",
+    "You are not starting over — you are continuing forward. Keep moving! ➡️",
+    # Mindset
+    "Success in health is a thousand small choices. Make yours count today! 🎯",
+    "The pain of discipline is nothing compared to the pain of regret. Stay disciplined! ⚡",
+    "Don't wish for it — work for it, eat for it, sleep for it! 🌟",
+    "Your body hears everything your mind says. Tell it great things today! 🧠",
+    "Transform your habits and you transform your life. One day at a time! 🦋",
+    "Nobody regrets eating healthy. Ever. Keep that in mind today! 💚",
+    "The secret to getting ahead is getting started — you already did that! 🏁",
+    "Energy flows where attention goes. Focus on your health today! 🔋",
+    "You are not on a diet — you are on a journey to the best version of you! 🛤️",
+    "Your only competition is who you were yesterday. Beat that person today! 🏆",
+    # Fun & Light
+    "Water first. Always water first. Your cells are literally cheering you on! 💧",
+    "Eat the rainbow today — and no, Skittles don't count 😄 Veggies do! 🌈",
+    "Your gut is talking to you — feed it something amazing today! 🌿",
+    "Think of every meal as a high five to your future self! 🖐️",
+    "Breakfast is the opening scene of your health movie today — make it a blockbuster! 🎬",
+    "Your body is rooting for you 24/7. Give it the fuel it deserves! ⚡",
+    "Good food is the foundation of genuine happiness. Eat well, be happy! 😊",
+    "You are one meal away from being in a good mood. Choose that meal wisely! 🍽️",
+    "Every vegetable you eat is a tiny superhero fighting for your health! 🦸",
+    "Drink your water, eat your protein, sleep your 8 hours. You're a health machine! 🤖",
+    # Streaks & Consistency
+    "Another day, another step forward. Your streak is proof of your commitment! ��",
+    "Streaks aren't just numbers — they're a visual record of who you're becoming! 📈",
+    "Each day you follow your plan is a day your body says thank you! 🙏",
+    "Momentum is your superpower. Don't let it stop today! ⚡",
+    "Day by day — that's how legends are made. You're building your legend! 🌟",
+    "The longer your streak, the harder it is to break. Keep it alive! 💪",
+    "Every meal completed is a vote for the streak. Vote yes today! ✅",
+    "Staying consistent is the most powerful thing you can do for your health! 🎯",
+    "You're not just following a plan — you're building an unbreakable identity! 🏆",
+    "Habits are built in the moments you push through. Today is one of those moments! 💫",
+    # Seasonal / general
+    "This is the version of you who shows up. Today is another chapter! 📖",
+    "The journey of a thousand miles begins with a single meal. Eat it well! ��",
+    "Health is a gift you give yourself — unwrap it every single day! 🎁",
+    "You're not just losing weight / gaining strength — you're gaining life! ✨",
+    "The best investment you'll ever make is in your own health. Invest today! 💰",
+    "Make your body your best project. It's already in progress! 🛠️",
+    "Every plan follower started where you are. Every legend stayed consistent. Be both! 🌟",
+    "You are the author of your health story. Write a great chapter today! ✍️",
+    "Obstacles are just detours in the right direction. Stay on your path! 🛤️",
+    "Be patient with yourself — great things take time, consistency, and good food! 🌱",
+    "Don't count the days — make the days count! ⏳",
+    "You already made the hardest decision — to start. Now just keep going! 🚀",
+    "Health doesn't happen to you — it happens because of you. Own it today! 💪",
+    "The mirror isn't the only measure of progress. How do you feel today? That matters! 💫",
+    "One more day of consistency and you're one day closer to your goal. That's maths! 🔢",
+    "Dr. Meghana designed this plan for *you*. Trust it. Follow it. See magic happen! ✨",
+    "Goals don't care about your mood. Show up anyway — your future self will thank you! 🏆",
+    "You've already proven you can do hard things. Today is just another proof! 💪",
+]
+
 
 def get_motivation(goal: Optional[str], day_number: int) -> str:
+    """
+    Returns a different motivational quote each day.
+    Cycles through 100 quotes using the day number.
+    Goal-aware: tries to pick from a relevant section first.
+    """
     goal_lower = (goal or "").lower()
+    idx        = (day_number - 1) % len(MOTIVATIONS)
 
+    # For strong goal signals, bias the starting index toward relevant quotes
     if "loss" in goal_lower or "fat" in goal_lower or "slim" in goal_lower:
-        lines = [
-            "Every clean meal today is a step closer to your goal. You've got this! 🔥",
-            "Consistency beats perfection. One good day at a time! 💪",
-            "Your body is changing — trust the process and stay the course. 🌱",
-            "Small choices today = big results tomorrow. Keep going! ⚡",
-            "You didn't come this far to only come this far. Push through! 🏆",
-        ]
-    elif "gain" in goal_lower or "bulk" in goal_lower:
-        lines = [
-            "Fuel up well today — your muscles are counting on you! 💪",
-            "Growth happens when you stay consistent with your nutrition. Keep eating right! 🏋️",
-            "Every meal is a building block. Make them count today! 🧱",
-            "Rest, eat, grow — that's the formula. You're doing great! 🌟",
-            "Your gains are made in the kitchen first. Eat strong today! 🍽️",
-        ]
+        idx = (day_number - 1) % 10               # quotes 0-9: weight loss focused
     elif "muscle" in goal_lower or "strength" in goal_lower:
-        lines = [
-            "Strength is built one rep and one meal at a time. Today counts! 💥",
-            "Protein up, stay hydrated, and give it everything today! 🥊",
-            "Champions are built on days they don't feel like it. Show up! 🏆",
-            "Your nutrition today is your performance tomorrow. Fuel wisely! ⚡",
-            "Every gram of protein matters. Stick to your plan today! 💪",
-        ]
+        idx = 10 + (day_number - 1) % 10          # quotes 10-19: muscle focused
+    elif "gain" in goal_lower or "bulk" in goal_lower:
+        idx = 20 + (day_number - 1) % 5           # quotes 20-24: weight gain focused
     else:
-        lines = [
-            "A healthy day starts with the right mindset. You've got this! ��",
-            "Nourish your body today — it's the only one you have! 🌿",
-            "Small healthy habits, done consistently, change everything. Keep going! 🌱",
-            "Eat well, move well, feel well. One good day today! ☀️",
-            "Your health is your wealth. Invest in it today! 💚",
-        ]
+        idx = 25 + (day_number - 1) % 75          # quotes 25-99: general
 
-    return lines[(day_number - 1) % len(lines)]
+    return MOTIVATIONS[idx % len(MOTIVATIONS)]
 
 
 # ── Morning message builder ────────────────────────────────────────────────────
@@ -214,16 +307,50 @@ def build_morning_message(profile: dict, day_number: int) -> str:
     message = (
         f"Good morning, {first_name}! 🌅\n\n"
         f"It's {today} — {day_str} of your plan. Here's your focus for today:\n\n"
-        f"💧 *Water goal* — Drink {water_target} of water today\n"
+        f"💧 *Water goal* — Drink {water_target} today\n"
         f"🍳 *Breakfast* — {meals['breakfast']}\n"
         f"🍽️ *Lunch* — {meals['lunch']}\n"
         f"🥗 *Evening snack* — {meals['snack']}\n"
         f"🌙 *Dinner* — {meals['dinner']}\n\n"
         f"💪 {motivation}\n\n"
-        f"Tap here anytime if you have questions about your meals or need guidance. "
+        f"Ask me anything about your meals, nutrition, or how you're feeling today. "
         f"I'm right here! 😊"
     )
     return message
+
+
+def build_morning_message_with_streak(
+    profile: dict,
+    day_number: int,
+    current_streak: int,
+    longest_streak: int,
+) -> str:
+    """
+    Enhanced morning message that includes streak info.
+    Called when streak data is available.
+    """
+    base = build_morning_message(profile, day_number)
+
+    if current_streak <= 0:
+        return base
+
+    # Append streak line before the closing line
+    if current_streak == 1:
+        streak_line = "🔥 *Streak* — Day 1! A fresh start — let's build something great!"
+    elif current_streak < 7:
+        streak_line = f"🔥 *Streak* — {current_streak} days strong! Keep the fire burning!"
+    elif current_streak < 15:
+        streak_line = f"🔥 *Streak* — {current_streak} days! You're in the zone now!"
+    elif current_streak < 30:
+        streak_line = f"⚡ *Streak* — {current_streak} days! You're unstoppable!"
+    else:
+        streak_line = f"�� *Streak* — {current_streak} days! Absolute legend status!"
+
+    # Insert streak line before the last paragraph
+    parts = base.rsplit("\n\n", 1)
+    if len(parts) == 2:
+        return parts[0] + f"\n\n{streak_line}\n\n" + parts[1]
+    return base + f"\n\n{streak_line}"
 
 
 # ── Fetch profile by internal user_id (no Firebase token needed) ──────────────
@@ -464,8 +591,17 @@ def insert_morning_message(
         # Calculate day number
         day_number = get_plan_day_number(plan_start)
 
-        # Build message
-        message_text = build_morning_message(profile, day_number)
+        # Build message — with streak if available
+        try:
+            from streak import get_streak
+            streak_data    = get_streak(db, session_id)
+            current_streak = streak_data.get("current_streak", 0)
+            longest_streak = streak_data.get("longest_streak", 0)
+            message_text   = build_morning_message_with_streak(
+                profile, day_number, current_streak, longest_streak
+            )
+        except Exception:
+            message_text = build_morning_message(profile, day_number)
 
         # Insert into ChatMessage
         msg = ChatMessage(

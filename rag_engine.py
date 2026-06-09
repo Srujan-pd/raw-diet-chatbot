@@ -148,7 +148,6 @@ def fetch_user_profile_db(firebase_uid: Optional[str], db) -> Optional[dict]:
             }
 
         # ── Active DietPlan ───────────────────────────────────────────────────
-        # UserDietPlan → DietPlan
         udp_row = db.execute(sql_text("""
             SELECT udp.id, udp."planId", udp."currentDay", udp."startDate",
                    dp.name, dp.description, dp."dietType", dp.calories,
@@ -175,7 +174,6 @@ def fetch_user_profile_db(firebase_uid: Optional[str], db) -> Optional[dict]:
                 "todayMeals":   [],
             }
 
-            # Fetch today's DietDay meals + recipes
             day_row = db.execute(sql_text("""
                 SELECT dd.id FROM "DietDay" dd
                 WHERE dd."planId" = :pid AND dd."dayNumber" = :day
@@ -219,7 +217,6 @@ def fetch_user_profile_db(firebase_uid: Optional[str], db) -> Optional[dict]:
                 profile["activeDietPlan"]["todayMeals"] = today_meals
 
         # ── Active RationPlan ─────────────────────────────────────────────────
-        # UserRationPlan → RationPlan
         urp_row = db.execute(sql_text("""
             SELECT urp.id, urp."planId", urp."startDate",
                    rp.name, rp.description, rp."dietType", rp.duration,
@@ -232,7 +229,6 @@ def fetch_user_profile_db(firebase_uid: Optional[str], db) -> Optional[dict]:
         """), {"uid": user_id}).fetchone()
 
         if urp_row:
-            # Calculate current day from startDate
             from datetime import datetime, timezone
             start = urp_row[2]
             if hasattr(start, 'replace'):
@@ -256,7 +252,6 @@ def fetch_user_profile_db(firebase_uid: Optional[str], db) -> Optional[dict]:
                 "todayMeals":      [],
             }
 
-            # Fetch today's RationDay meals + items
             rday_row = db.execute(sql_text("""
                 SELECT rd.id FROM "RationDay" rd
                 WHERE rd."planId" = :pid AND rd."dayNumber" = :day
@@ -299,7 +294,7 @@ def fetch_user_profile_db(firebase_uid: Optional[str], db) -> Optional[dict]:
                     })
                 profile["activeRationPlan"]["todayMeals"] = today_rmeals
 
-        # ── Available global plans (for free / non-active users) ──────────────
+        # ── Available global plans (for free users) ───────────────────────────
         if not profile.get("activeDietPlan") and not profile.get("activeRationPlan"):
             dp_rows = db.execute(sql_text("""
                 SELECT id, name, description, "dietType", duration, calories
@@ -411,8 +406,8 @@ def build_user_context(profile: Optional[dict]) -> str:
     if family:
         if family.get("waterIntake"):
             wi_map = {
-                "LESS_THAN_1L": "<1 L/day", "ONE_TO_TWO_L": "1–2 L/day",
-                "TWO_TO_THREE_L": "2–3 L/day", "MORE_THAN_3L": ">3 L/day",
+                "LESS_THAN_1L": "<1 L/day", "ONE_TO_TWO_L": "1-2 L/day",
+                "TWO_TO_THREE_L": "2-3 L/day", "MORE_THAN_3L": ">3 L/day",
             }
             lines.append(f"Water Intake: {wi_map.get(family['waterIntake'], family['waterIntake'])}")
 
@@ -427,7 +422,6 @@ def build_active_plan_context(profile: Optional[dict]) -> str:
 
     lines = []
 
-    # ── DietPlan (Recipe-based) ───────────────────────────────────────────────
     adp = profile.get("activeDietPlan")
     if adp:
         lines.append("\n=== YOUR ACTIVE DIET PLAN ===")
@@ -444,8 +438,8 @@ def build_active_plan_context(profile: Optional[dict]) -> str:
             for meal in today_meals:
                 lines.append(f"\n  [{meal['mealType']}]")
                 for r in meal.get("recipes") or []:
-                    cal  = f" • {r['calories']} kcal" if r.get("calories") else ""
-                    prot = f" • {r['proteinG']}g protein" if r.get("proteinG") else ""
+                    cal  = f" - {r['calories']} kcal" if r.get("calories") else ""
+                    prot = f" - {r['proteinG']}g protein" if r.get("proteinG") else ""
                     lines.append(f"    - {r['name']}{cal}{prot}")
                     if r.get("description"):
                         lines.append(f"      ({r['description']})")
@@ -453,7 +447,6 @@ def build_active_plan_context(profile: Optional[dict]) -> str:
             lines.append("  (No meal data for today yet)")
         lines.append("==============================")
 
-    # ── RationPlan (Item-based) ───────────────────────────────────────────────
     arp = profile.get("activeRationPlan")
     if arp:
         lines.append("\n=== YOUR ACTIVE RATION PLAN ===")
@@ -471,13 +464,13 @@ def build_active_plan_context(profile: Optional[dict]) -> str:
         if today_rmeals:
             lines.append(f"\nToday's Meals (Day {arp.get('currentDay', 1)}):")
             for meal in today_rmeals:
-                title = f" – {meal['title']}" if meal.get("title") else ""
+                title = f" - {meal['title']}" if meal.get("title") else ""
                 time  = f" ({meal['time']})" if meal.get("time") else ""
                 lines.append(f"\n  [{meal['mealType']}]{title}{time}")
                 for item in meal.get("items") or []:
                     qty  = f" {item['quantity']}" if item.get("quantity") else ""
-                    unit = f" {item['unit']}" if item.get("unit") else ""
-                    note = f" — {item['notes']}" if item.get("notes") else ""
+                    unit = f" {item['unit']}"     if item.get("unit")     else ""
+                    note = f" - {item['notes']}"  if item.get("notes")    else ""
                     inst = f" ({item['instruction']})" if item.get("instruction") else ""
                     lines.append(f"    - {item['name']}{qty}{unit}{note}{inst}")
         else:
@@ -488,23 +481,13 @@ def build_active_plan_context(profile: Optional[dict]) -> str:
 
 
 def build_available_plans_context(profile: Optional[dict]) -> str:
-    """
-    List available global plans from DB.
-    For free users: shown always (they have no active plan).
-    For paid users: shown when they ask about other plans.
-    Always filter to match user's food preferences when possible.
-    """
     avail = (profile or {}).get("availablePlans") or {}
     dp    = avail.get("dietPlans") or []
     rp    = avail.get("rationPlans") or []
 
-    # Also show for paid users if they have availablePlans populated
-    # (fetch_user_profile_db only populates availablePlans when no active plan exists,
-    #  so for paid users we skip this block — handled by active plan context instead)
     if not dp and not rp:
         return ""
 
-    # Get user food preferences to annotate matches
     food  = (profile or {}).get("foodactivity") or {}
     prefs = [p.lower() for p in (food.get("foodPreferences") or [])]
 
@@ -513,8 +496,8 @@ def build_available_plans_context(profile: Optional[dict]) -> str:
         lines.append("\nDiet Plans (Recipe-based):")
         for p in dp:
             diet = (p.get("dietType") or "").lower()
-            match = " ✓ matches your diet" if diet and diet in prefs else ""
-            lines.append(f"  • {p.get('name', 'Unnamed')}{match}")
+            match = " (matches your diet)" if diet and diet in prefs else ""
+            lines.append(f"  - {p.get('name', 'Unnamed')}{match}")
             if p.get("dietType"):    lines.append(f"    Diet: {p['dietType']}")
             if p.get("duration"):    lines.append(f"    Duration: {p['duration']} days")
             if p.get("calories"):    lines.append(f"    Calories: {p['calories']} kcal/day")
@@ -523,8 +506,8 @@ def build_available_plans_context(profile: Optional[dict]) -> str:
         lines.append("\nRation Plans (Portion-based):")
         for p in rp:
             diet = (p.get("dietType") or "").lower()
-            match = " ✓ matches your diet" if diet and diet in prefs else ""
-            lines.append(f"  • {p.get('name', 'Unnamed')}{match}")
+            match = " (matches your diet)" if diet and diet in prefs else ""
+            lines.append(f"  - {p.get('name', 'Unnamed')}{match}")
             if p.get("dietType"):    lines.append(f"    Diet: {p['dietType']}")
             if p.get("duration"):    lines.append(f"    Duration: {p['duration']} days")
             if p.get("description"): lines.append(f"    Info: {p['description']}")
@@ -548,58 +531,44 @@ SYSTEM_PROMPT = f"""You are a warm nutrition guide at Red Apple Wellness Diet Ce
 
 {CLINIC_INFO}
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RESPONSE LENGTH — HARD RULE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Maximum 3–4 sentences per response
+RESPONSE LENGTH - HARD RULE:
+- Maximum 3-4 sentences per response
 - NEVER start with "Hey [Name]!" go straight to the answer
 - No long bullet lists (max 3 bullets if truly needed, one line each)
 - No repeating yourself
 - Be warm but brief like a quick helpful text from a friend
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PLAN-AWARE BEHAVIOUR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PLAN-AWARE BEHAVIOUR:
 
 PAID USER (has active plan):
-- When they ask about meals, snacks, or what to eat → suggest ONLY from their plan's today meals
+- When they ask about meals, snacks, or what to eat - suggest ONLY from their plan's today meals
 - Reference the actual recipe/item names from the plan context provided
 - Never suggest foods outside their plan
-- If they ask about hunger/snack → check if SNACK meal exists in today's plan, suggest that item
-- If no snack in today's plan → "Your plan doesn't have a listed snack for today try sipping water first and check the Plans tab for guidance."
+- If they ask about hunger/snack - check if SNACK meal exists in today's plan, suggest that item
+- If no snack in today's plan - "Your plan doesn't have a listed snack for today try sipping water first and check the Plans tab for guidance."
 
 FREE USER (no active plan):
 - Never suggest specific snacks, meals, or recipes
-- When asked what to eat or snack ideas → redirect to Plans tab
+- When asked what to eat or snack ideas - redirect to Plans tab
 - "To get meal and snack suggestions tailored to your goal, check out the Plans section in the app that's where the expert-designed options are."
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIET PLANS — RULE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIET PLANS - RULE:
 - NEVER create or write out a full meal plan or diet chart
-- For plan questions → reference available plan names from the context, direct to Plans tab
+- For plan questions - reference available plan names from the context, direct to Plans tab
 - Free users: "Explore the Plans section in the app for plans designed by Dr. Meghana."
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-OUT OF SCOPE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"That's outside my area — nutrition and health is my zone! What can I help you with? 😊"
+OUT OF SCOPE:
+"That's outside my area - nutrition and health is my zone! What can I help you with?"
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MEDICAL CONDITIONS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Redirect briefly: "For [condition], Dr. Meghana can personalise a safe plan for you reach her at +91 7774944783 or rawdiets@gmail.com"
-EMERGENCY: "⚠️ Please seek immediate medical attention right away."
+MEDICAL CONDITIONS:
+Redirect briefly: "For [condition], Dr. Meghana can personalise a safe plan for you - reach her at +91 7774944783 or rawdiets@gmail.com"
+EMERGENCY: "Please seek immediate medical attention right away."
 Never suggest medications.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-WHATSAPP
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHATSAPP:
 Never mention WhatsApp in your text. The app has a separate button for that.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FINAL REMINDERS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FINAL REMINDERS:
 - Never contradict the user's allergies or dietary restrictions
 - Never mention competitor diet centers
 - Format links as plain URLs not markdown
@@ -650,7 +619,7 @@ def build_prompt(
 
 {user_ctx}{active_plan_ctx}{avail_plans_ctx}{goal_line}
 {history_block}
-REMINDER: 3–4 sentences max. Do NOT open with "Hey [Name]!". Be direct and warm.
+REMINDER: 3-4 sentences max. Do NOT open with "Hey [Name]!". Be direct and warm.
 
 User message: {user_message}
 
@@ -667,7 +636,7 @@ def _truncate_gemini_answer(text: str, max_sentences: int = 5) -> str:
     if len(sentences) <= max_sentences:
         return text
     trimmed = " ".join(sentences[:max_sentences])
-    logger.info(f"✂️ Trimmed response from {len(sentences)} to {max_sentences} sentences")
+    logger.info(f"Trimmed response from {len(sentences)} to {max_sentences} sentences")
     return trimmed
 
 
@@ -709,11 +678,6 @@ def is_hunger_intent(message: str) -> bool:
     return any(kw in msg for kw in HUNGER_KEYWORDS)
 
 
-# Meal type display order for hunger response
-_MEAL_ORDER = [
-    "MORNING", "BREAKFAST", "MID_AFTERNOON", "LUNCH", "SNACK", "DINNER", "BED_TIME"
-]
-
 _MEAL_LABELS = {
     "MORNING":       "Morning",
     "BREAKFAST":     "Breakfast",
@@ -726,7 +690,6 @@ _MEAL_LABELS = {
 
 
 def _build_plan_meals_text(profile: dict) -> str:
-    """Flatten today's meals from whichever active plan into readable text for the prompt."""
     lines = []
 
     adp = profile.get("activeDietPlan")
@@ -766,12 +729,11 @@ def _build_plan_meals_text(profile: dict) -> str:
 
 
 def _build_available_plans_text(profile: dict) -> str:
-    """Short summary of available plans for free user hunger prompt."""
     avail = profile.get("availablePlans") or {}
     dp    = avail.get("dietPlans") or []
     rp    = avail.get("rationPlans") or []
     lines = []
-    for p in (dp + rp)[:5]:  # max 5 plans to keep prompt lean
+    for p in (dp + rp)[:5]:
         name = p.get("name", "Plan")
         dur  = f"{p['duration']} days" if p.get("duration") else ""
         diet = p.get("dietType", "")
@@ -782,17 +744,13 @@ def _build_available_plans_text(profile: dict) -> str:
 
 
 def _hunger_response_paid(profile: dict) -> str:
-    """
-    For paid users: build a focused Gemini prompt using their actual plan meals.
-    Gemini suggests what to eat from within the plan not random food.
-    """
     meals_text = _build_plan_meals_text(profile)
 
     if not meals_text:
         adp = profile.get("activeDietPlan") or profile.get("activeRationPlan") or {}
         return (
-            f"You're on {adp.get('name', 'your plan')} open the Plans tab "
-            f"to see today's full meal schedule. Try some water while you wait! 💧"
+            f"You're on {adp.get('name', 'your plan')} - open the Plans tab "
+            f"to see today's full meal schedule. Try some water while you wait!"
         )
 
     identity   = (profile or {}).get("identity") or {}
@@ -809,9 +767,8 @@ Their name is: {first_name or 'the user'}
 Rules:
 - Suggest something they can eat RIGHT NOW based on what's in their plan above
 - Do NOT invent food outside the plan
-- If the plan has a light meal or something suitable as a snack (fruits, nuts, light item), suggest that
-- If all meals are heavy, suggest the lightest option or a portion of it, and mention drinking water first
-- Reply in 2–3 sentences max. Warm and direct. Do NOT start with "Hey [name]!"
+- If the plan has a light meal or something suitable as a snack, suggest that
+- Reply in 2-3 sentences max. Warm and direct. Do NOT start with "Hey [name]!"
 - No bullet lists
 
 Trainer response:"""
@@ -822,16 +779,12 @@ Trainer response:"""
     except Exception as e:
         logger.error(f"❌ _hunger_response_paid Gemini error: {e}")
         return (
-            "Check your plan's meals in the Plans tab pick the lightest item available "
-            "and have some water alongside it! 💧"
+            "Check your plan's meals in the Plans tab - pick the lightest item available "
+            "and have some water alongside it!"
         )
 
 
 def _hunger_response_free(profile: dict) -> str:
-    """
-    For free users: use Gemini to give a short, enticing overview of available plans
-    and gently encourage them to get one with actual plan names from DB.
-    """
     plans_text = _build_available_plans_text(profile)
 
     identity   = (profile or {}).get("identity") or {}
@@ -853,11 +806,11 @@ User name: {first_name or 'the user'}
 {diet_hint}
 
 Rules:
-- Briefly mention 1–2 relevant plan names from the list above (if available) that match their diet preference
-- Give ONE short benefit of being on a plan (e.g. knowing exactly what to eat)
+- Briefly mention 1-2 relevant plan names from the list above that match their diet preference
+- Give ONE short benefit of being on a plan
 - End with a friendly nudge to check the Plans tab
-- Do NOT suggest specific foods or snacks since they have no plan
-- 2–3 sentences max. Warm and direct. Do NOT start with "Hey [name]!"
+- Do NOT suggest specific foods or snacks
+- 2-3 sentences max. Warm and direct. Do NOT start with "Hey [name]!"
 - No bullet lists
 
 Trainer response:"""
@@ -868,13 +821,12 @@ Trainer response:"""
     except Exception as e:
         logger.error(f"❌ _hunger_response_free Gemini error: {e}")
         return (
-            "Getting on a plan means you'll always know exactly what to eat no guessing! "
-            "Check the Plans tab to explore Dr. Meghana's options. 😊"
+            "Getting on a plan means you'll always know exactly what to eat - no guessing! "
+            "Check the Plans tab to explore Dr. Meghana's options."
         )
 
 
 def _hunger_response(profile: Optional[dict]) -> str:
-    """Route hunger intent to paid or free handler."""
     if get_user_plan_status(profile) == 'paid':
         return _hunger_response_paid(profile)
     return _hunger_response_free(profile or {})
@@ -895,8 +847,6 @@ def detect_goal_from_history(history: list) -> Optional[str]:
     return None
 
 
-# ── Short canned responses ────────────────────────────────────────────────────
-
 def _greeting_response(profile: Optional[dict]) -> str:
     identity   = (profile or {}).get("identity") or {}
     name       = identity.get("fullName") or (profile or {}).get("name") or ""
@@ -907,13 +857,13 @@ def _greeting_response(profile: Optional[dict]) -> str:
         active = get_active_plan_summary(profile)
         pname  = active.get("name", "your plan") if active else "your plan"
         return (
-            f"Hey{addr}! 👋 Good to see you you're on {pname} right now. "
-            f"What can I help you with today? 😊"
+            f"Hey{addr}! Good to see you - you're on {pname} right now. "
+            f"What can I help you with today?"
         )
     return (
-        f"Hey{addr}! 👋 I'm your nutrition guide at Red Apple Wellness Diet Center. "
+        f"Hey{addr}! I'm your nutrition guide at Red Apple Wellness Diet Center. "
         f"Whether it's weight loss, muscle gain, or eating better I'm here to help. "
-        f"What's on your mind? 😊"
+        f"What's on your mind?"
     )
 
 
@@ -924,7 +874,7 @@ def _consult_response(profile: Optional[dict]) -> str:
     addr     = f", {first}" if first else ""
     return (
         f"Sure{addr}! Dr. Meghana would be happy to help with a personal consultation. "
-        f"Reach her at +91 7774944783 or rawdiets@gmail.com use the WhatsApp button in the app to connect directly. 😊"
+        f"Reach her at +91 7774944783 or rawdiets@gmail.com - use the WhatsApp button in the app to connect directly."
     )
 
 
@@ -940,13 +890,8 @@ NAV_INTENTS = [
             "check my bmi", "what is my bmi",
         ],
         "answer": (
-            "📊 *BMI & BMR Calculator*\n\n"
-            "Here's how to find it:\n"
-            "1️⃣ Go to the *Dashboard*\n"
-            "2️⃣ Tap on *Health Tools*\n"
-            "3️⃣ Select *BMI & BMR Calc*\n\n"
-            "There you can calculate your Body Mass Index and Basal Metabolic Rate "
-            "based on your current height and weight. It updates whenever you update your profile! 💪"
+            "To find your BMI and BMR: go to the Dashboard, tap Health Tools, "
+            "then select BMI & BMR Calc. It updates automatically whenever you update your profile!"
         ),
     },
     {
@@ -958,12 +903,9 @@ NAV_INTENTS = [
             "how much water", "water reminder",
         ],
         "answer": (
-            "💧 *Water Tracker*\n\n"
-            "Here's how to log your water intake:\n"
-            "1️⃣ Go to the *Home* tab\n"
-            "2️⃣ Tap on *Water Tracker*\n\n"
-            "You can log every glass you drink throughout the day and track it "
-            "against your daily water goal. Staying hydrated is a huge part of your plan! 🌊"
+            "To log your water: go to the Home tab and tap Water Tracker. "
+            "You can log every glass throughout the day and track it against your daily goal. "
+            "Staying hydrated is a big part of your plan!"
         ),
     },
     {
@@ -975,13 +917,8 @@ NAV_INTENTS = [
             "progress chart", "how am i doing",
         ],
         "answer": (
-            "📈 *My Progress*\n\n"
-            "Here's how to review your diet progress:\n"
-            "1️⃣ Go to the *Home* tab\n"
-            "2️⃣ Tap on *My Progress*\n\n"
-            "You'll see a full overview of your diet plan progress — "
-            "days completed, meals followed, and how far you've come on your journey. "
-            "Keep going, every day counts! 🏆"
+            "To check your progress: go to the Home tab and tap My Progress. "
+            "You'll see days completed, meals followed, and how far you've come. Keep going!"
         ),
     },
     {
@@ -994,18 +931,9 @@ NAV_INTENTS = [
             "how to find plan", "where are plans",
         ],
         "answer": (
-            "🥗 *Explore Diet Plans*\n\n"
-            "Here's how to find and activate a plan:\n"
-            "1️⃣ Tap the *Diet* tab at the bottom of the screen\n"
-            "2️⃣ Browse all available plans and filter by your goal or diet type\n"
-<<<<<<< HEAD
-            "3️⃣ Tap any plan to see full details duration, meals, and what's included\n"
-=======
-            "3️⃣ Tap any plan to see full details — duration, meals, and what's included\n"
->>>>>>> 1f0248c7e9920867f7b0c8f036cc3562b1057848
-            "4️⃣ Purchase the plan that fits you to activate it instantly ✅\n\n"
-            "Once active, your plan meals will appear in the Home tab every day. "
-            "Not sure which plan suits you? Just ask me and I'll help you choose! 😊"
+            "To find a plan: tap the Diet tab at the bottom, browse by goal or diet type, "
+            "tap any plan to see full details, then purchase to activate it instantly. "
+            "Once active, your meals appear in the Home tab every day. Not sure which suits you? Just ask!"
         ),
     },
     {
@@ -1017,17 +945,9 @@ NAV_INTENTS = [
             "recipe list", "view recipes", "explore recipes",
         ],
         "answer": (
-            "🍳 *Recipes*\n\n"
-            "Here's how to explore all recipes:\n"
-            "1️⃣ Tap the *Recipe* tab at the bottom of the screen\n"
-            "2️⃣ Browse hundreds of recipes filter by meal type, diet preference, or ingredients\n"
-            "3️⃣ Tap any recipe to see full ingredients, step-by-step instructions, and nutrition info\n\n"
-            "You can also swap recipes within your active plan if you want variety. "
-<<<<<<< HEAD
-            "Found something you like? Your plan's meals are always a good starting point! ��"
-=======
-            "Found something you like? Your plan's meals are always a good starting point! 😋"
->>>>>>> 1f0248c7e9920867f7b0c8f036cc3562b1057848
+            "Tap the Recipe tab at the bottom to browse all recipes - "
+            "filter by meal type, diet preference, or ingredients. "
+            "Tap any recipe for full ingredients, steps, and nutrition info."
         ),
     },
     {
@@ -1041,37 +961,25 @@ NAV_INTENTS = [
             "change health info", "medical details",
         ],
         "answer": (
-            "👤 *Health Profile*\n\n"
-            "Here's how to update your health details:\n"
-            "1️⃣ Go to your *Profile* (tap your profile icon)\n"
-            "2️⃣ You can add or update:\n"
-            "   • Weight & height\n"
-            "   • Health conditions\n"
-            "   • Diet preferences & allergies\n"
-            "   • Activity level and sleep habits\n"
-            "3️⃣ Save your changes and the AI will use your latest details instantly ✅\n\n"
-            "Keeping your profile updated ensures your plan and guidance stay accurate for you!"
+            "To update your health details: tap your profile icon, then edit weight, height, "
+            "health conditions, diet preferences, allergies, and activity level. "
+            "Keeping it updated ensures your plan stays accurate for you!"
         ),
     },
 ]
 
 
 def is_nav_intent(message: str) -> Optional[str]:
-    """
-    Check if message matches a navigation intent.
-    Returns the answer string if matched, else None.
-    Checks all keywords across all nav intents.
-    """
     msg = message.lower().strip()
     for intent in NAV_INTENTS:
         for kw in intent["keywords"]:
             if kw in msg:
-                logger.info(f"✅ Nav intent matched: {intent['id']} (keyword: '{kw}')")
+                logger.info(f"Nav intent matched: {intent['id']} (keyword: '{kw}')")
                 return intent["answer"]
     return None
 
 
-# ── Main answer functions ──────────────────────────────────────────────────────
+# ── Profile loader ─────────────────────────────────────────────────────────────
 
 def _load_profile(firebase_uid, firebase_token):
     """Load profile from DB (preferred) or API fallback."""
@@ -1085,11 +993,13 @@ def _load_profile(firebase_uid, firebase_token):
             finally:
                 _db.close()
         except Exception as e:
-            logger.warning(f"⚠️ DB profile load failed: {e}")
+            logger.warning(f"DB profile load failed: {e}")
     if not profile:
         profile = fetch_user_profile(firebase_token)
     return profile
 
+
+# ── Main answer functions ──────────────────────────────────────────────────────
 
 def get_answer(
     question: str,
@@ -1101,7 +1011,7 @@ def get_answer(
     global gemini_client
 
     if gemini_client is None:
-        return "Having a little trouble connecting right now give it a moment and try again! 🙏"
+        return "Having a little trouble connecting right now - give it a moment and try again!"
 
     profile = _load_profile(firebase_uid, firebase_token)
 
@@ -1129,18 +1039,18 @@ def get_answer(
         goal   = detect_goal_from_history(history)
         prompt = build_prompt(question, profile, history, goal)
 
-        logger.info("🤖 Calling Gemini for answer...")
+        logger.info("Calling Gemini for answer...")
         resp   = gemini_client.models.generate_content(
             model=GEMINI_MODEL,
             contents=prompt
         )
         answer = _truncate_gemini_answer(resp.text.strip())
-        logger.info(f"✅ Answer ready ({len(answer)} chars)")
+        logger.info(f"Answer ready ({len(answer)} chars)")
         return answer
 
     except Exception as e:
-        logger.error(f"❌ get_answer error: {e}\n{traceback.format_exc()}")
-        return "Something came up on my end let's try that again in a second! 💪"
+        logger.error(f"get_answer error: {e}\n{traceback.format_exc()}")
+        return "Something came up on my end - let's try that again in a second!"
 
 
 def get_answer_stream(
@@ -1156,9 +1066,9 @@ def get_answer_stream(
         return f"data: {_j.dumps(payload)}\n\n"
 
     if gemini_client is None:
-        msg = "Having a little trouble connecting right now give it a moment and try again! 🙏"
+        msg = "Having a little trouble connecting right now - give it a moment and try again!"
         yield sse({"type": "chunk", "text": msg})
-        yield sse({"type": "done",  "text": ""})
+        yield sse({"type": "done",  "text": "", "full_text": msg})
         return
 
     profile = _load_profile(firebase_uid, firebase_token)
@@ -1199,7 +1109,7 @@ def get_answer_stream(
         prompt      = build_prompt(question, profile, history, goal)
         accumulated = ""
 
-        logger.info("🤖 Streaming from Gemini...")
+        logger.info("Streaming from Gemini...")
         stream = gemini_client.models.generate_content_stream(
             model=GEMINI_MODEL,
             contents=prompt
@@ -1210,14 +1120,12 @@ def get_answer_stream(
                 yield sse({"type": "chunk", "text": chunk.text})
 
         final = _truncate_gemini_answer(accumulated.strip())
-        logger.info(f"✅ Stream complete ({len(final)} chars)")
-        # full_text is used by main.py to save to DB
-        # text is empty so the frontend does NOT render it again (prevents duplicate)
+        logger.info(f"Stream complete ({len(final)} chars)")
         yield sse({"type": "done", "text": "", "full_text": final})
 
     except Exception as e:
-        logger.error(f"❌ get_answer_stream error: {e}\n{traceback.format_exc()}")
-        yield sse({"type": "error", "text": "Something came up on my end let's try that again in a second! 💪"})
+        logger.error(f"get_answer_stream error: {e}\n{traceback.format_exc()}")
+        yield sse({"type": "error", "text": "Something came up on my end - let's try that again!"})
 
 
 def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
@@ -1244,5 +1152,5 @@ def get_recent_messages(db, session_id: str, limit: int = 10) -> list:
                 i += 1
         return history_pairs[-limit:]
     except Exception as e:
-        logger.error(f"❌ get_recent_messages error: {e}")
+        logger.error(f"get_recent_messages error: {e}")
         return []
